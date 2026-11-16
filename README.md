@@ -103,7 +103,10 @@ safe  fc 6 addr 500..599                      # on refusal, drive this range to 
 
 ## Formal verification
 
-`lean/Oplot.lean` proves, in Lean 4 (no Mathlib), eleven statements about the decision model:
+`lean/Oplot.lean` proves, in Lean 4 (no Mathlib), fifteen statements about the decision model. They
+check with `lean lean/Oplot.lean` (Lean 4.35.0, exit 0, no output) and their axiom footprint is
+`[propext, choice, Quot.sound]` — the ordinary classical axioms, and **no `sorryAx`**, which is how a
+"proof" with a hole would betray itself.
 
 | # | theorem | what it says |
 |---|---|---|
@@ -112,11 +115,11 @@ safe  fc 6 addr 500..599                      # on refusal, drive this range to 
 | 3 | `allow_requires_a_rule` | an allow verdict exists only because an allow rule matched |
 | 4 | `dual_needs_a_dual_rule` | allow-with-dual exists only because a dual rule matched |
 | 5 | `no_double_accept` | a frame number accepted once is refused the second time |
-| 6 | `window_bounded` | the replay window never remembers more than 64 numbers |
-| 7 | `span_no_wrap` | a validated address span cannot wrap past 65535 |
-| 8 | `payload_bounded` | a validated write cannot exceed the 250-byte payload budget |
-| 9 | `boots_monotone` | the persisted boot counter strictly increases |
-| 10 | `dead_man_fires` / `dead_man_quiet` | a guard that never heard its supervisor fails safe; one inside the window does not |
+| 6 | `window_bounded` | the replay window never remembers more than 65 numbers |
+| 7 | `last_address_inside` | a validated address span cannot wrap past 65535 (`omega`) |
+| 8 | `payload_bounded` | a validated write cannot exceed 125 registers / 250 bytes |
+| 9 | `boots_monotone`, `boots_never_decrease` | the persisted boot counter strictly increases |
+| 10 | `dead_man_fires`, `dead_man_quiet`, `dead_man_fires_late` | a guard that never heard its supervisor fails safe on the first tick; one inside the window does not; one silent too long does |
 | 11 | `dual_keys_distinct` | one key cannot produce the two signatures dual control requires |
 
 To check: `lean lean/Oplot.lean` — it typechecks or it does not.
