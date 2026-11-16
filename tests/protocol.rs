@@ -124,7 +124,7 @@ fn the_counter_file_notices_edits_and_rollback() {
     drop(store);
 
     // Reopening verifies the chain and continues from where it stopped.
-    let mut store = CounterStore::open(&path, key).expect("reopen");
+    let store = CounterStore::open(&path, key).expect("reopen");
     assert_eq!(store.boots(), 2);
     assert_eq!(store.records(), 2);
 
