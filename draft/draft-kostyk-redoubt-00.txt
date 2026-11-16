@@ -336,10 +336,13 @@ Table of Contents
    deployed in pairs, with the two guards required to agree before a
    write is applied; a disagreement is a SAFE event.
 
-   The handshake has not been cross-checked against a reference Noise
-   implementation at the time of writing.  Implementers SHOULD use an
-   existing Noise implementation rather than the reference code, and
-   SHOULD verify the pattern against known test vectors.
+   The handshake has been cross-checked against a reference implementation of
+   Noise: our initiator completes a handshake with the `snow` responder, and
+   transport messages decrypt in both directions (tests/snow_parity.rs).  Two
+   deviations were found and fixed by that check -- the prologue was hashed in
+   two pieces instead of one, and the pre-message public keys were not folded
+   into the transcript.  Implementers SHOULD still prefer an existing Noise
+   implementation to the reference code.
 
 14. IANA Considerations
 

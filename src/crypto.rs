@@ -123,12 +123,28 @@ enum Step {
 
 impl Handshake {
     fn new(local: &KeyPair, remote: [u8; KEY], initiator: bool, prologue_extra: &[u8]) -> Self {
-        // h = protocol name padded to HASHLEN; ck = h. Then the prologue, so two different plants
-        // (or two different device identities) cannot be made to share a transcript.
+        // h = protocol name padded to HASHLEN; ck = h. The prologue is mixed in **one** call, as the
+        // Noise specification says: mixing it in two pieces would hash it twice and make our
+        // transcript differ from every reference implementation — a parity test with `snow` caught
+        // exactly that.
         let mut hash = *PROTOCOL;
         let chaining_key = hash;
-        mix_hash(&mut hash, PROLOGUE);
-        mix_hash(&mut hash, prologue_extra);
+        let mut prologue = Vec::with_capacity(PROLOGUE.len() + prologue_extra.len());
+        prologue.extend_from_slice(PROLOGUE);
+        prologue.extend_from_slice(prologue_extra);
+        mix_hash(&mut hash, &prologue);
+        // Pre-messages: Noise folds the public keys that were known before the first byte into the
+        // transcript hash, initiator first. KK knows both static keys in advance, so they are mixed
+        // here — leaving them out makes every reference implementation fail to decrypt our first
+        // message, which is exactly how the parity test found this.
+        let local_public = local.public_bytes();
+        if initiator {
+            mix_hash(&mut hash, &local_public);
+            mix_hash(&mut hash, &remote);
+        } else {
+            mix_hash(&mut hash, &remote);
+            mix_hash(&mut hash, &local_public);
+        }
         Self {
             chaining_key,
             hash,
@@ -274,7 +290,13 @@ impl Handshake {
             .encrypt_in_place_detached(Nonce::from_slice(&nonce), &self.hash, plaintext)
             .map_err(|_| CryptoError::AuthenticationFailed)?;
         self.nonce = self.nonce.saturating_add(1);
-        mix_hash(&mut self.hash, plaintext);
+        // Noise hashes the ciphertext, and the ciphertext is the encrypted payload followed by the
+        // tag. Hashing an empty payload separately would hash nothing at all — which still changes
+        // the transcript, because SHA-256 of (h || "") is not h. The reference implementation made
+        // this visible.
+        if !plaintext.is_empty() {
+            mix_hash(&mut self.hash, plaintext);
+        }
         mix_hash(&mut self.hash, &tag);
         let mut out = [0u8; TAG];
         out.copy_from_slice(&tag);
@@ -294,7 +316,6 @@ impl Handshake {
             .decrypt_in_place_detached(Nonce::from_slice(&nonce), &self.hash, &mut [], Tag::from_slice(&tag_bytes))
             .map_err(|_| CryptoError::AuthenticationFailed)?;
         self.nonce = self.nonce.saturating_add(1);
-        mix_hash(&mut self.hash, &[]);
         mix_hash(&mut self.hash, &tag_bytes);
         Ok(())
     }

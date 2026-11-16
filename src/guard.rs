@@ -284,10 +284,14 @@ impl Guard {
         };
         let previous = found.previous.clone();
         let restored = previous.len();
+        let written = found.current.len();
         for (unit, addr, value) in previous {
             self.plc.set(unit, addr, value);
         }
-        if self.record(format!("revoked: batch {batch} restored {restored} outputs")).is_err() {
+        if self
+            .record(format!("revoked: batch {batch} replaced {written} outputs, restored {restored}"))
+            .is_err()
+        {
             return Err("the audit log is unavailable; the revocation was not recorded");
         }
         self.batches.retain(|b| b.id != batch);

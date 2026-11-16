@@ -127,10 +127,9 @@ impl CounterStore {
             return Ok(store);
         }
         let file = std::fs::File::open(&store.path).map_err(|error| ReplayError::Io(error.to_string()))?;
-        let mut line_number = 0usize;
         let mut previous = [0u8; 32];
-        for line in BufReader::new(file).lines() {
-            line_number += 1;
+        for (index, line) in BufReader::new(file).lines().enumerate() {
+            let line_number = index + 1;
             let line = line.map_err(|error| ReplayError::Io(error.to_string()))?;
             let line = line.trim();
             if line.is_empty() {

@@ -26,3 +26,6 @@ opt-level = 2
 lto = "thin"
 strip = true
 panic = "abort"
+
+[dev-dependencies]
+snow = "0.9.6"

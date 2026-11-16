@@ -19,9 +19,11 @@
   window, the arithmetic bounds, the boot counter, the dead-man timer and dual control behave as
   described. They do **not** say the compiled Rust is free of bugs, and they do not model AES-GCM or
   X25519 — those are assumptions.
-- **The handshake has not been cross-checked against a reference Noise implementation.** The `snow`
-  crate was not available offline when this was written. Before production use: run the
-  `snow`-based cross-check (see the roadmap below) or replace our handshake with `snow` directly.
+- **The handshake is now cross-checked against a reference implementation.** `tests/snow_parity.rs`
+  runs our initiator against the `snow` reference responder: the reference accepts our first message,
+  we accept its second, and both directions of transport traffic decrypt. Two real deviations were
+  found and fixed this way — the prologue was being hashed in two pieces instead of one, and the
+  pre-message public keys were not folded into the transcript hash.
 - **No timing side-channel analysis.** Tag comparisons use constant-time equality; the higher-level
   code does not claim constant-time behaviour.
 - **Nothing about the PLC itself.** A PLC that accepts unauthenticated writes from a directly
