@@ -29,3 +29,6 @@ panic = "abort"
 
 [dev-dependencies]
 snow = "0.9.6"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }

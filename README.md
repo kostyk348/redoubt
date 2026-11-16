@@ -1,5 +1,9 @@
 # РЕДУТ/1 — защищённый канал управления для ПЛК
 
+[English](README.md) · **Русский** — [README.ru.md](README.ru.md)
+
+![tests](https://img.shields.io/badge/tests-28-brightgreen) ![clippy](https://img.shields.io/badge/clippy-warnings%20are%20errors-brightgreen) ![lean](https://img.shields.io/badge/lean-20%20theorems-blueviolet) ![noise](https://img.shields.io/badge/noise-parity%20with%20snow-informational) ![licence](https://img.shields.io/badge/licence-MIT-blue)
+
 **По-русски коротко.** Протокол и библиотека для управления ПЛК так, чтобы «правильный» с точки
 зрения Modbus клиент не мог сделать что угодно: рукопожатие на Noise KK (X25519 + AES-256-GCM),
 кадр с аутентификацией заголовка, окно повторов, которое не сбрасывается перезагрузкой, политика
