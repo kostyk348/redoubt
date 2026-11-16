@@ -1,0 +1,21 @@
+# ОПЛОТ/1 policy — what the guard will let through.
+#
+# Deny-overrides: a `deny` line wins over every `allow` line, wherever it sits. No matching line at
+# all is a denial. The policy comes from the engineering project (the I/O list), not from watching
+# traffic: observation teaches the same lessons to whoever was quiet for a month.
+
+# Telemetry: reading is cheap to allow and hard to misuse.
+allow fc in {3,4} addr 0..499 role reader
+
+# Setpoints: an operator, inside the working range, with the value bounded as well.
+allow fc 6 addr 40001..40010 role operator value in 0..1000
+
+# Physical outputs: two people, two keys. One signature is a wish, two are a decision.
+allow fc in {5,15} addr 100..199 role supervisor dual
+
+# The emergency-stop wiring is not reachable over the network, by anyone, ever.
+deny fc in {5,6,15,16} addr 0..99
+
+# Ranges that must not be left where they are when a request is refused: the guard writes the
+# provisioned safe value and records the substitution.
+safe fc 6 addr 500..599

@@ -1,0 +1,28 @@
+[package]
+name = "oplot"
+version = "0.1.0"
+edition = "2021"
+description = "ОПЛОТ/1 — a fail-closed control channel for Modbus-era PLCs: Noise KK handshake, AEAD frames, replay windows that survive reboots, deny-overrides policy, dual control, reversible writes and a hash-chained audit log"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/kostyk348/oplot"
+rust-version = "1.80"
+
+[lib]
+name = "oplot"
+path = "src/lib.rs"
+
+[dependencies]
+aes-gcm = "0.10"
+hkdf = "0.12"
+hmac = "0.12"
+sha2 = "0.10"
+subtle = "2"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+zeroize = "1"
+getrandom = "0.2"
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+strip = true
+panic = "abort"
