@@ -1,78 +1,60 @@
-# РЕДУТ/1 — защищённый канал управления для ПЛК
+# Redoubt/1 — a fail-closed control channel for PLCs
 
-[English](README.md) · **Русский** — [README.ru.md](README.ru.md)
+**English** · [Русский](README.ru.md)
 
-![tests](https://img.shields.io/badge/tests-28-brightgreen) ![clippy](https://img.shields.io/badge/clippy-warnings%20are%20errors-brightgreen) ![lean](https://img.shields.io/badge/lean-20%20theorems-blueviolet) ![noise](https://img.shields.io/badge/noise-parity%20with%20snow-informational) ![licence](https://img.shields.io/badge/licence-MIT-blue)
+![tests](https://img.shields.io/badge/tests-28-brightgreen)
+![clippy](https://img.shields.io/badge/clippy-warnings%20are%20errors-brightgreen)
+![lean](https://img.shields.io/badge/lean-20%20theorems-blueviolet)
+![noise](https://img.shields.io/badge/noise-parity%20with%20snow-informational)
+![licence](https://img.shields.io/badge/licence-MIT-blue)
 
-**По-русски коротко.** Протокол и библиотека для управления ПЛК так, чтобы «правильный» с точки
-зрения Modbus клиент не мог сделать что угодно: рукопожатие на Noise KK (X25519 + AES-256-GCM),
-кадр с аутентификацией заголовка, окно повторов, которое не сбрасывается перезагрузкой, политика
-«запрет побеждает разрешение», двойная подпись для опасных записей, обратимая запись и журнал-
-цепочка. Отдельно — файл `lean/Redoubt.lean`: одиннадцать доказанных в Lean 4 утверждений о модели
-решений (политика, окно, границы, счётчик загрузок, таймер безопасности, двойное управление).
+A **redoubt** is a small fort you hold from the inside. This repository is a protocol and a library
+that stand between a control network and a PLC, and decide **per operation**, not per connection,
+whether a request may reach the controller. The controller is not modified: plain Modbus/TCP on the
+south side, Redoubt/1 on the north side.
 
-Решения не «доверяй сканеру трафика»: политика пишется из проекта автоматизации (список I/O), а не
-выучивается наблюдением. Агентов и почты в проекте нет — их предложили убрать, и это правильно:
-чем меньше компонентов держат ключи, тем меньше поверхностей.
+## Why
 
-> **Название: РЕДУТ/1 (Redoubt/1).** Редут — полевая крепость, которую держат изнутри; слово
-> читается одинаково по-русски и по-английски и не занято в ICS-пространстве. Прежнее рабочее имя
-> (ОПЛОТ/oplot) больше не используется: репозиторий переименован в `redoubt`.
+Modbus has no authentication, no authorisation and no replay protection. The TLS-based Modbus
+Security profile protects the **channel**, but an authenticated client may still invoke any function
+code — including the one that writes to the register holding a pump. FrostyGoop (2024) spoke
+Modbus/TCP directly to a district-heating process; advisory AA26-097A (2026) described attacks on
+internet-facing PLCs through malicious project files and manipulated HMI data.
 
-## The draft
+## Seven gates
 
-`draft/draft-kostyk-redoubt-00.txt` is the Internet-Draft for Redoubt/1, written to be submitted to
-the IETF: frame format, handshake, replay window and boot counter, the policy language, dual control,
-reversible batches, the audit chain, the formal-verification appendix, and a Security Considerations
-section that lists what the protocol does *not* cover. Submitting it is a comment period, not an
-approval: that is how RFC 6588 (ucode) and the recent Modbus serial-link security draft exist.
+Every request passes these in order, and a failure at any gate stops it:
 
-## What this is
+1. **frame** — authenticates and parses as exactly one known operation (AEAD over a 24-byte header);
+2. **session** — the frame belongs to the open session;
+3. **replay** — the frame number is fresh, given a 64-wide window and a **boot counter that survives a power cut**;
+4. **policy** — deny-overrides, deny-by-default: function, address span, unit, role;
+5. **dual control** — for critical outputs, two signatures from two different keys;
+6. **audit** — if the decision cannot be written to the hash chain, the operation **does not happen**;
+7. **apply** — the write is journalled with the values it overwrote, so the batch can be revoked.
 
-A guard that sits between a control network and a PLC, and a protocol for talking to it:
+An eighth gate runs on a clock: if the supervisor stops sending heartbeats, every output with a
+provisioned safe value is driven to it, and the event is recorded.
 
-```text
- HMI / SCADA            РЕДУТ/1 channel                 guard                  PLC
- ───────────  ────────────────────────────────  ──────────────────────  ─────────────────
-  request  ─▶  Noise KK handshake, then AEAD  ─▶  seven gates, in order  ─▶  plain Modbus/TCP
-               frames with a replay window        (see below)               (unchanged)
-```
+## What is verified
 
-The PLC is not modified: the guard is a bump-in-the-wire, with plain Modbus on its south side. Every
-request passes seven gates, and a failure at any of them stops it:
+| check | result |
+|---|---|
+| `cargo test` | **28 tests** (guard, protocol, handshake parity) |
+| `cargo clippy --all-targets -- -D warnings` | clean |
+| `lean lean/Redoubt.lean` | exit 0, **20 theorems**, axioms `propext`/`choice`/`Quot.sound`, no `sorryAx` |
+| parity with `snow` (reference Noise) | handshake completes, transport decrypts both ways |
+| `cargo kani` (in CI) | three harnesses: total decoding, total policy evaluation, no address wrap |
 
-1. **frame** — does it authenticate and parse as exactly one known operation?
-2. **session** — does the frame belong to the open session?
-3. **replay** — is the frame number fresh, given a 64-wide window and a persisted boot counter?
-4. **policy** — deny-overrides, deny-by-default: is this function, span, unit and role allowed?
-5. **dual control** — for critical outputs, two valid signatures from two different keys?
-6. **audit** — can the decision be written to a hash chain? If not, nothing happens.
-7. **apply** — writes are journalled with their previous values, so a batch can be revoked.
-
-An eighth gate runs on a clock instead of a request: if the supervisor stops breathing, the guard
-drives every output it knows a safe value for, and records that it did.
-
-## Why it is built this way
-
-- **No invented cryptography.** X25519, HKDF-SHA256, AES-256-GCM and HMAC-SHA256 come from audited
-  crates; the composition is the Noise KK pattern (the shape WireGuard uses), not something we made
-  up at three in the morning.
-- **Deny-overrides, not first-match.** Order-dependent allow-lists are how people ship holes: an
-  `allow` inserted above the protecting `deny` silently opens a pump. Here a denial anywhere wins.
-- **Replay against reboots.** `engineBoots` is the SNMPv3 USM idea from 1998; a counter in RAM is
-  reset by a power cut, a counter in a hash-chained file is not. If the file is edited, refused; if
-  it is rolled back relative to a supervisor's copy, refused.
-- **Reversibility.** Every applied batch keeps the values it overwrote. `revoke` puts them back, and
-  the revocation is in the log. This is the answer to "two days without heating".
-- **Fail-closed everywhere.** Unparsable frame, unknown function, missing signature, unwritable log
-  — all four refuse; a critical write that cannot be authorised drives the output to its safe value
-  rather than leaving it where it was.
+The parity check earned its keep: it found **two real bugs** — the prologue was hashed in two pieces
+instead of one, and the pre-message public keys were never folded into the transcript. Both are fixed,
+and `tests/snow_parity.rs` keeps them fixed.
 
 ## Quick start
 
 ```sh
-cargo test          # 25 tests: handshake, frame, replay, policy, audit, guard end to end
-cargo build --release
+cargo test             # 28 tests
+ci/run.sh              # everything CI runs: fmt, clippy, tests, lean
 ```
 
 ```rust
@@ -81,7 +63,6 @@ use redoubt::guard::{Decision, Guard, RoleKeys};
 use redoubt::policy::{Policy, Role};
 use redoubt::{Handshake, KeyPair};
 
-// Provisioning: both sides know each other's static public key before the first byte.
 let station = KeyPair::generate()?;
 let device = KeyPair::generate()?;
 let mut initiator = Handshake::initiator(&station, device.public_bytes(), b"plant-7/unit-1");
@@ -98,64 +79,58 @@ let mut guard = Guard::new(policy, [7u8; 32], RoleKeys { operator: [11u8; 32], s
 guard.provision_safe(1, 40001, 0);
 guard.attach(server, Role::Operator);
 
-let frame = Frame::new(FrameHeader { flags: 0, unit: 1, fc: 6, session_id: 0x1234, seq: 1, addr: 40001, qty: 1 }, &42u16.to_be_bytes())?;
+let header = FrameHeader { flags: 0, unit: 1, fc: 6, session_id: 0x1234, seq: 1, addr: 40001, qty: 1 };
+let frame = Frame::new(header, &42u16.to_be_bytes())?;
 let mut buffer = [0u8; redoubt::RECEIVE_BUFFER];
 let length = frame.seal(&mut client, &mut buffer)?;
 assert!(matches!(guard.handle(&mut buffer, length, 1_000), Decision::Allow { .. }));
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-## The policy file
+## Policy
+
+A policy is a text file of rule lines; `policy.example` is a working starting point.
 
 ```plumb
-allow fc in {3,4} addr 0..499 role reader      # telemetry: read-only, everywhere in the shop
-allow fc 6 addr 40001..40010 role operator    # setpoints: an operator, inside the working range
-allow fc in {5,15} addr 0..99 role supervisor dual
-deny  fc in {5,6} addr 0..99                  # emergency-stop wiring: never by wire
-safe  fc 6 addr 500..599                      # on refusal, drive this range to its safe value
+allow fc in {3,4} addr 0..499 role reader          # telemetry
+allow fc 6 addr 40001..40010 role operator value in 0..1000
+allow fc in {5,15} addr 100..199 role supervisor dual
+deny  fc in {5,6,15,16} addr 0..99                 # emergency-stop wiring
+safe  fc 6 addr 500..599                           # drive safe on refusal
 ```
 
-## Formal verification
-
-`lean/Redoubt.lean` proves, in Lean 4 (no Mathlib), fifteen statements about the decision model. They
-check with `lean lean/Redoubt.lean` (Lean 4.35.0, exit 0, no output) and their axiom footprint is
-`[propext, choice, Quot.sound]` — the ordinary classical axioms, and **no `sorryAx`**, which is how a
-"proof" with a hole would betray itself.
-
-| # | theorem | what it says |
-|---|---|---|
-| 1 | `deny_overrides` | one matching `deny` beats every `allow`, in any order |
-| 2 | `no_allow_no_allowance` | with no allow rule matching, the verdict is `safe` or `denied` |
-| 3 | `allow_requires_a_rule` | an allow verdict exists only because an allow rule matched |
-| 4 | `dual_needs_a_dual_rule` | allow-with-dual exists only because a dual rule matched |
-| 5 | `no_double_accept` | a frame number accepted once is refused the second time |
-| 6 | `window_bounded` | the replay window never remembers more than 65 numbers |
-| 7 | `last_address_inside` | a validated address span cannot wrap past 65535 (`omega`) |
-| 8 | `payload_bounded` | a validated write cannot exceed 125 registers / 250 bytes |
-| 9 | `boots_monotone`, `boots_never_decrease` | the persisted boot counter strictly increases |
-| 10 | `dead_man_fires`, `dead_man_quiet`, `dead_man_fires_late` | a guard that never heard its supervisor fails safe on the first tick; one inside the window does not; one silent too long does |
-| 11 | `dual_keys_distinct` | one key cannot produce the two signatures dual control requires |
-
-To check: `lean lean/Redoubt.lean` — it typechecks or it does not.
-
-**What this is not.** These proofs are about a *model*, not about the compiled Rust, and not about
-AES-GCM or X25519 (those are assumptions). "No overflow in the address span" is proved in `Nat`
-arithmetic; the Rust side uses `saturating_add` and is tested, not proved. A proof is a reason to
-trust the design, not a certificate that the binary is unhackable — read `SECURITY.md`.
+A `deny` line wins over every `allow` line regardless of order, and no matching line is a denial.
+Order-dependent allow-lists are how people ship holes.
 
 ## Repository layout
 
 ```text
-src/crypto.rs     Noise KK handshake, session keys, AEAD seal/open
-src/frame.rs      one frame layout, decoder that cannot panic, no allocations
-src/replay.rs     sliding window + hash-chained engineBoots file
-src/policy.rs     deny-overrides parser and evaluator, three verdicts
-src/audit.rs      hash chain with HMAC checkpoints
-src/guard.rs      the seven gates, dual control, revocation, dead-man timer
-lean/Redoubt.lean   eleven theorems about the decision model
-tests/            25 tests, no mocks, no network
+src/crypto.rs       Noise KK handshake, session keys, AEAD seal/open
+src/frame.rs        one frame layout, decoder that cannot panic, no allocations
+src/replay.rs       sliding window + hash-chained engineBoots file
+src/policy.rs       deny-overrides parser and evaluator, three verdicts
+src/audit.rs        hash chain with HMAC checkpoints
+src/guard.rs        the seven gates, dual control, revocation, dead-man timer
+src/kani_proofs.rs  Kani harnesses (cfg(kani)), run in CI on Linux
+lean/Redoubt.lean   20 theorems about the decision model
+tests/              28 tests, no mocks, no network
+draft/              draft-kostyk-redoubt-00.txt — the Internet-Draft
+ci/                 the same checks CI runs, for a local commit
 ```
+
+## Documents
+
+- [Internet-Draft](draft/draft-kostyk-redoubt-00.txt) — `draft-kostyk-redoubt-00`
+- [SECURITY.md](SECURITY.md) — threat model, what is proved and what is not, how to report a problem
+- [lean/Redoubt.lean](lean/Redoubt.lean) — the proofs, with their axiom footprint
+
+## What this is not
+
+It does not replace network segmentation, does not save you from a project file an engineer signed
+itself, does not promise confidentiality on a 9600 bit/s serial line, does not defend against a
+compromised PLC firmware, and does not replace key management. The guard is a single point of failure
+by construction: deploy two, and require them to agree. `SECURITY.md` lists every limit.
 
 ## Licence
 
-MIT OR Apache-2.0.
+MIT. Protocol name: Redoubt/1. Maintainer: Konstantin Parashchuk <lain90269@gmail.com>.
