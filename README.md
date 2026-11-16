@@ -13,6 +13,14 @@
 
 > Название протокола рабочее (РЕДУТ/1, `redoubt`). Переименуем, когда конструкция устоится.
 
+## The draft
+
+`draft/draft-kostyk-redoubt-00.txt` is the Internet-Draft for Redoubt/1, written to be submitted to
+the IETF: frame format, handshake, replay window and boot counter, the policy language, dual control,
+reversible batches, the audit chain, the formal-verification appendix, and a Security Considerations
+section that lists what the protocol does *not* cover. Submitting it is a comment period, not an
+approval: that is how RFC 6588 (ucode) and the recent Modbus serial-link security draft exist.
+
 ## What this is
 
 A guard that sits between a control network and a PLC, and a protocol for talking to it:

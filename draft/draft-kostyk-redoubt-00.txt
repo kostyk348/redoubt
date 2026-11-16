@@ -1,0 +1,391 @@
+Network Working Group                                          K. Parashchuk
+Internet-Draft                                                      Teplomash
+Intended status: Informational                              16 November 2026
+Expires: 20 May 2027
+
+
+            Redoubt/1: Authorised Control of Modbus-Era PLCs
+                       draft-kostyk-redoubt-00
+
+Abstract
+
+   This document specifies Redoubt/1, a control channel for programmable
+   logic controllers that sits in front of Modbus/TCP and decides, per
+   operation, whether a request may reach the controller.  Modbus has no
+   authentication, no authorisation and no replay protection; the
+   TLS-based Modbus Security profile adds a protected channel but still
+   lets any authenticated client invoke any function code.  Redoubt/1
+   adds what the incidents of 2024-2026 show is missing: a decision per
+   operation rather than per connection, a replay window that survives a
+   controller reboot, a three-valued outcome that can drive outputs to a
+   safe state instead of merely refusing, dual control for critical
+   outputs, reversible batches, and an audit chain that fails closed.
+   The decision core is formalised in Lean 4 and fifteen of its
+   properties are machine-checked; the proof artefacts are published
+   with the implementation.
+
+Status of This Memo
+
+   This Internet-Draft is submitted in full conformance with the
+   provisions of BCP 78 and BCP 79.
+
+   Internet-Drafts are working documents of the Internet Engineering
+   Task Force (IETF).  Note that other groups may also distribute
+   working documents as Internet-Drafts.  The list of current Internet-
+   Drafts is at https://datatracker.ietf.org/drafts/current/.
+
+   Internet-Drafts are draft documents valid for a maximum of six months
+   and may be updated, replaced, or obsoleted by other documents at any
+   time.  It is inappropriate to use Internet-Drafts as reference
+   material or to cite them other than as "work in progress."
+
+   This Internet-Draft will expire on 20 May 2027.
+
+Copyright Notice
+
+   Copyright (c) 2026 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+Table of Contents
+
+   1. Introduction .................................................. 2
+   2. Conventions and Terminology ................................... 3
+   3. Threat Model .................................................. 3
+   4. Frame Format .................................................. 4
+   5. Handshake ..................................................... 5
+   6. Replay Window and Boot Counter ................................ 6
+   7. Policy Language ............................................... 6
+   8. Dual Control .................................................. 7
+   9. Reversible Batches ............................................ 8
+   10. Audit Chain .................................................. 8
+   11. Dead-Man Timer ............................................... 9
+   12. Formal Verification .......................................... 9
+   13. Security Considerations ..................................... 10
+   14. IANA Considerations ......................................... 11
+   15. References .................................................. 11
+
+1. Introduction
+
+   Modbus/TCP [MODBUS] carries no authentication, no integrity check and
+   no notion of who is allowed to do what.  FrostyGoop, first described
+   in 2024, was the first publicly analysed ICS malware that spoke
+   Modbus/TCP directly to manipulate a district-heating process; the
+   affected site lost heating for two days.  In 2026 the advisory
+   AA26-097A described campaigns against internet-exposed PLCs from
+   several vendors, using malicious project files and manipulated HMI
+   data, and pointed at ports 44818, 2222, 102 and 502 -- that is, at
+   the protocols themselves.
+
+   Two conclusions follow.  First, protecting the channel is necessary
+   but not sufficient: a correctly authenticated client can still write
+   to the register that stops a pump.  Second, the protocol that decides
+   what a client may do has to be as robust as the process it protects:
+   available when the network is not, honest when its own components
+   fail, and able to say "put it in a safe state" rather than only "no".
+
+   Redoubt/1 is a guard that sits between the control network and the
+   controller (a "bump in the wire").  The controller is unmodified:
+   plain Modbus/TCP on the guard's south side, Redoubt/1 on its north
+   side.  Every request passes seven gates in order, and a failure at any
+   gate stops it:
+
+      1. the frame authenticates and parses as exactly one known
+         operation;
+      2. the frame belongs to the open session;
+      3. the frame number is fresh, given a 64-wide window and a
+         persisted boot counter;
+      4. the policy allows this function, address span, unit and role
+         (deny-overrides, deny-by-default);
+      5. for critical outputs, two signatures from two different keys;
+      6. the decision can be recorded in the audit chain;
+      7. the write is applied and journalled with the values it
+         overwrote, so that it can be revoked.
+
+   An eighth gate runs on a clock rather than on a request: if the
+   supervisor stops sending heartbeats, the guard writes the last-known-
+   safe value to every output it has one for, and records that it did.
+
+2. Conventions and Terminology
+
+   The key words MUST, MUST NOT, REQUIRED, SHALL, SHOULD, SHOULD NOT,
+   MAY and OPTIONAL are to be interpreted as described in BCP 14
+   [RFC2119] [RFC8174].
+
+   Operation:   a Modbus function code applied to an address span of a
+                unit identifier.
+   Guard:       the entity that terminates Redoubt/1 and speaks Modbus/TCP
+                to the controller.
+   Verdict:     one of ALLOW, DENY and SAFE.  SAFE means "do not apply
+                the request, and drive the affected outputs to the values
+                provisioned for them".
+   Batch:       the set of writes produced by one operation, with the
+                values they replaced.
+
+3. Threat Model
+
+   In scope: an attacker who can reach the guard's north side, replay
+   recorded traffic, modify frames in flight, hold a stolen operator
+   credential, or tamper with the guard's own files; an insider who is
+   authorised to operate but not to perform a particular action; a
+   network that is unavailable or lying.
+
+   Out of scope: an attacker who controls the controller's firmware; an
+   attacker with physical access to the guard's memory while it runs; a
+   supply chain that ships a malicious image; traffic analysis
+   resistance; and the security of the engineering workstation that
+   produces project files.  Section 13 repeats these limits, because a
+   protocol that overstates its coverage is worse than one that states
+   it.
+
+4. Frame Format
+
+   A frame is one header, one bounded payload and one tag.  The header
+   is the associated data of the AEAD, so a modified function code or
+   address fails the tag rather than being trusted.
+
+    0        1      2      3       4..12      12..20     20..22   22..24
+    +--------+------+------+------+----------+----------+--------+-------+
+    | version| flags| unit |  fc  | session  |   seq    |  addr  |  qty  |
+    +--------+------+------+------+----------+----------+--------+-------+
+    | payload (0..250 bytes)                     | tag (16 bytes)         |
+    +--------------------------------------------+------------------------+
+
+   version:  1.  A different version is a different protocol, not a
+             negotiation; there is no version negotiation.
+   flags:    bit 0 RESPONSE, bit 1 CRITICAL, bit 2 DUAL.
+   session:  the 64-bit session identifier from the handshake.
+   seq:      the frame number, starting at 1, unique per direction.
+   addr, qty: the Modbus address span; qty is bounded by 125 registers.
+   payload:  the values for a write, or empty for a read.  A single write
+             that requests dual control carries 2 bytes of value and two
+             32-byte signatures (66 bytes total).
+   tag:      the AES-256-GCM tag over the header (as associated data)
+             and the payload.
+
+   Function codes 1, 2, 3, 4, 5, 6, 15 and 16 are understood.  Any other
+   function code is refused by name: a guard that forwards unknown codes
+   forwards the next one too.
+
+   The decoder MUST refuse a frame that is shorter than the header, longer
+   than the budget, of an unknown version, of an unknown function code, or
+   whose payload length does not match the function code and quantity.
+   It MUST NOT allocate memory to do so.
+
+5. Handshake
+
+   Redoubt/1 uses the Noise KK pattern [NOISE] with X25519, SHA-256,
+   HKDF-SHA256 and AES-256-GCM.  Both peers know each other's static
+   public key before the first byte: provisioning already holds a list of
+   devices, and a plant at three in the morning has nobody to ask.
+
+     initiator                                    responder
+     ---------                                    ---------
+     -> e, es, ss          ephemeral, DH(e_i, s_r), DH(s_i, s_r)
+     <- e, ee, se          ephemeral, DH(e_r, e_i), DH(e_r, s_i)
+     split                 two AES-256-GCM keys, one per direction
+
+   The prologue is the ASCII string "REDOUBT/1" followed by the boot
+   counter (Section 6) and the device identifiers of both peers, so a
+   handshake cannot be transplanted to another pair of devices or to
+   another boot of the same device.  Each handshake message carries a
+   16-byte tag over the transcript; a peer that does not hold the static
+   key its public key claims fails at the first message.
+
+   After the split, the initiator's send key is the responder's receive
+   key and vice versa.  Frame numbers in each direction MUST start at 1
+   and MUST NOT repeat; a session that would exhaust its frame numbers
+   MUST be re-keyed.
+
+6. Replay Window and Boot Counter
+
+   A frame number is accepted once.  The receiver keeps a 64-wide sliding
+   window [RFC4303]: a frame number above the highest is accepted unless
+   it is zero, a number below the highest is accepted if it is inside the
+   window and was not seen before, and everything below the window is
+   refused.
+
+   A window in RAM is reset by a power cut, after which last week's
+   recorded frame is fresh again.  Redoubt/1 therefore keeps an
+   engineBoots counter, as SNMPv3 does with engineBoots and engineTime
+   [RFC3414], in an append-only file in which every record carries an
+   HMAC over (boots, previous record's MAC) and links to the previous
+   record.  The counter is incremented and fsync'ed before a session
+   starts.  On start-up the chain is verified: a record that does not
+   verify, a chain that does not link, or a boots value that decreases is
+   treated as tampering and the guard MUST refuse to serve.  A truncation
+   of the whole file is indistinguishable from a fresh installation, and
+   for that case the guard compares its counter against a value held by
+   the supervisor.
+
+7. Policy Language
+
+   A policy is a text file of rule lines.  Deny-overrides applies: a
+   denial anywhere beats an allowance anywhere, and a request that no
+   rule allows is denied.  Order-dependent allow-lists are how people
+   ship holes, so order carries no authority here.
+
+   allow fc in {3,4} addr 0..499   role reader
+   allow fc 6        addr 40001..40010 role operator value in 0..1000
+   allow fc in {5,15} addr 100..199 role supervisor dual
+   deny  fc in {5,6,15,16} addr 0..99
+   safe  fc 6        addr 500..599
+
+   A rule matches when every condition matches.  fc is a set of function
+   codes; addr is a span that MUST contain the whole requested span, not
+   merely its first address; role is a floor (supervisor satisfies
+   operator, operator does not satisfy supervisor); value bounds the
+   value of a single write; dual marks the operations that need two
+   signatures.
+
+   A policy that fails to parse MUST be rejected as a whole: a guard
+   that skips an unparsable line is a guard that silently allows
+   something.
+
+8. Dual Control
+
+   For an operation marked dual, the frame carries two signatures over
+   (header, value): one produced with the operator key and one with the
+   supervisor key.  Both MUST verify, and both MUST be present: a single
+   signature repeated twice does not satisfy the rule, because the two
+   keys are different and the signatures over the same input differ.
+
+   The signatures cover the whole header, including the session
+   identifier, the frame number, the function code, the address and the
+   quantity.  A signature obtained for one operation therefore cannot be
+   lifted into another: changing the address invalidates it.
+
+   If a dual operation arrives without dual control, or with a signature
+   that does not verify, the verdict is SAFE, not DENY: an output that
+   was about to be changed and cannot be authorised must be driven to
+   its provisioned value, not left in whatever state the last authorised
+   write left it.
+
+9. Reversible Batches
+
+   Every applied operation records, for each address it touched, the
+   value that was there before.  The set of (address, previous value)
+   pairs is a batch, identified by a batch number.  A revocation writes
+   those values back and records the revocation in the audit chain.
+
+   The guard SHOULD keep at least the seventy-two most recent batches and
+   MUST keep every batch that touched an output provisioned as safe.  A
+   guard that cannot record the previous values MUST NOT perform the
+   write: an irreversible control action is indistinguishable, after the
+   fact, from sabotage.
+
+10. Audit Chain
+
+   Each audit record's hash covers the previous record's hash and the
+   record's own text.  Periodically the guard signs the current hash with
+   a key that is not stored in the log itself, producing a checkpoint.  A
+   verifier recomputes the chain and the checkpoints; a modified record
+   breaks every hash after it, and a removed record breaks a checkpoint.
+
+   The log is a precondition, not a side effect: if the record cannot be
+   written, the operation it describes MUST NOT be performed.  A control
+   action nobody can prove afterwards is an action that did not happen.
+
+11. Dead-Man Timer
+
+   The supervisor sends a heartbeat over the same channel.  If no
+   authenticated frame has been seen for longer than the configured
+   timeout, the guard writes its provisioned safe values to every output
+   that has one and records the event.  A guard that has never heard a
+   heartbeat at all MUST behave the same way: absence of evidence is not
+   evidence of safety.
+
+12. Formal Verification
+
+   The decision core is modelled in Lean 4 and the following are machine-
+   checked, with the axiom footprint printed by the checker (propext,
+   choice and Quot.sound only; no sorryAx):
+
+     deny_overrides, no_allow_no_allowance, allow_requires_a_rule,
+     dual_needs_a_dual_rule, no_double_accept, window_bounded,
+     last_address_inside, payload_bounded, dual_payload_exact,
+     boots_monotone, boots_never_decrease, dead_man_fires,
+     dead_man_quiet, dead_man_fires_late, dual_keys_distinct,
+     get_set_same, restore_previous, no_write_without_allow,
+     allow_through_all_gates, denial_leaves_memory.
+
+   Of these, allow_through_all_gates is the one that matters most: an
+   ALLOW verdict implies every gate was passed.  The model is not the
+   implementation, and the cryptography is an assumption rather than a
+   subject of the proof; Section 13 says so explicitly.
+
+13. Security Considerations
+
+   This protocol does not make a controller secure.  It makes the path
+   through the guard decidable: unauthorised, replayed, unsigned or
+   unrecordable requests do not reach the controller.  It does not:
+
+   o  protect a controller reachable by other paths, which is why the
+      guard MUST be the only path and segmentation remains mandatory;
+   o  protect against a malicious project file that an engineer signs,
+      which is the technique described in AA26-097A;
+   o  provide confidentiality on serial links at 9600 bit/s: the serial
+      profile carries integrity and authenticity, and encryption is an
+      optional profile;
+   o  defend against a compromised controller firmware;
+   o  replace key management.  Provisioning, revoking and rotating static
+      keys is out of scope and is where deployments fail;
+   o  claim side-channel resistance.  Tag comparisons are constant-time;
+      the higher layers make no such claim.
+
+   The guard is a single point of failure by construction and SHOULD be
+   deployed in pairs, with the two guards required to agree before a
+   write is applied; a disagreement is a SAFE event.
+
+   The handshake has not been cross-checked against a reference Noise
+   implementation at the time of writing.  Implementers SHOULD use an
+   existing Noise implementation rather than the reference code, and
+   SHOULD verify the pattern against known test vectors.
+
+14. IANA Considerations
+
+   This document has no IANA actions.  It registers no URN namespace, no
+   port and no media type; a deployment chooses its own transport
+   binding.
+
+15. References
+
+15.1. Normative References
+
+   [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", BCP 14, RFC 2119, 1997.
+
+   [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC 2119
+              Key Words", BCP 14, RFC 8174, 2017.
+
+   [RFC4303]  Kent, S., "IP Encapsulating Security Payload (ESP)",
+              RFC 4303, 2005.
+
+   [RFC3414]  Blumenthal, U. and B. Wijnen, "User-based Security Model
+              (USM) for version 3 of the Simple Network Management
+              Protocol (SNMPv3)", RFC 3414, 2002.
+
+   [NOISE]    Perrin, T., "The Noise Protocol Framework", 2018.
+
+15.2. Informative References
+
+   [MODBUS]   Modbus Organization, "MODBUS Application Protocol
+              Specification V1.1b3", 2012.
+
+   [MBSSEC]   Modbus Organization, "MODBUS/TCP Security Protocol
+              Specification", 2018.
+
+   [AA26-097A] CISA, "Iranian-Affiliated Cyber Actors Exploit
+              Programmable Logic Controllers Across US Critical
+              Infrastructure", AA26-097A, 2026.
+
+   [FROSTY]   Dragos, "FrostyGoop: ICS Malware Targeting Operational
+              Technology", 2024.
+
+Authors' Addresses
+
+   Konstantin Parashchuk
+   Teplomash
+   Saint Petersburg
+   Russian Federation
+
+   Email: kostyk348@users.noreply.github.com
