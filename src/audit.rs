@@ -64,7 +64,7 @@ impl AuditLog {
     pub fn append(&mut self, text: &str) -> Result<usize, AuditError> {
         let previous = self.head();
         let mut hasher = Sha256::new();
-        hasher.update(b"OPLOT/1 audit");
+        hasher.update(b"REDOUBT/1 audit");
         hasher.update(previous);
         hasher.update(text.as_bytes());
         let mut hash = [0u8; 32];
@@ -84,7 +84,7 @@ impl AuditLog {
         let mut previous = [0u8; 32];
         for (index, record) in self.records.iter().enumerate() {
             let mut hasher = Sha256::new();
-            hasher.update(b"OPLOT/1 audit");
+            hasher.update(b"REDOUBT/1 audit");
             hasher.update(previous);
             hasher.update(record.text.as_bytes());
             let mut hash = [0u8; 32];
@@ -136,7 +136,7 @@ impl AuditLog {
     fn sign(&self, index: usize) -> Result<[u8; 32], AuditError> {
         let record = self.records.get(index).ok_or(AuditError::Empty)?;
         let mut mac = Hmac::<Sha256>::new_from_slice(&self.key).map_err(|_| AuditError::Key)?;
-        mac.update(b"OPLOT/1 checkpoint");
+        mac.update(b"REDOUBT/1 checkpoint");
         mac.update(&(index as u64).to_be_bytes());
         mac.update(&record.hash);
         let mut out = [0u8; 32];

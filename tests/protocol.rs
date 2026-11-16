@@ -3,11 +3,11 @@
 mod common;
 
 use common::{connect, header, pair, seal};
-use oplot::audit::AuditLog;
-use oplot::crypto::{Handshake, MESSAGE};
-use oplot::frame::{Frame, MAX_FRAME};
-use oplot::policy::{Policy, Request, Role, Verdict};
-use oplot::replay::{CounterStore, ReplayError, ReplayWindow};
+use redoubt::audit::AuditLog;
+use redoubt::crypto::{Handshake, MESSAGE};
+use redoubt::frame::{Frame, MAX_FRAME};
+use redoubt::policy::{Policy, Request, Role, Verdict};
+use redoubt::replay::{CounterStore, ReplayError, ReplayWindow};
 
 #[test]
 fn a_handshake_leaves_both_sides_able_to_talk() {
@@ -111,7 +111,7 @@ fn after_a_restart_nothing_at_or_below_the_floor_is_fresh() {
 
 #[test]
 fn the_counter_file_notices_edits_and_rollback() {
-    let dir = std::env::temp_dir().join("oplot-counter-test");
+    let dir = std::env::temp_dir().join("redoubt-counter-test");
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join(format!("counter-{}", std::process::id()));
     let _ = std::fs::remove_file(&path);

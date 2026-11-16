@@ -1,7 +1,7 @@
 //! Shared helpers: a handshake between two in-memory peers, and frame plumbing.
 
-use oplot::crypto::{Handshake, KeyPair, Session};
-use oplot::frame::{Frame, FrameHeader, MAX_FRAME};
+use redoubt::crypto::{Handshake, KeyPair, Session};
+use redoubt::frame::{Frame, FrameHeader, MAX_FRAME};
 
 /// Fixed key material so tests are reproducible and never touch the system random source for the
 /// long-term keys (the ephemerals are still random, as they must be).

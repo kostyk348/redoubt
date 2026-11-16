@@ -1,4 +1,4 @@
-# ОПЛОТ/1 policy — what the guard will let through.
+# РЕДУТ/1 policy — what the guard will let through.
 #
 # Deny-overrides: a `deny` line wins over every `allow` line, wherever it sits. No matching line at
 # all is a denial. The policy comes from the engineering project (the I/O list), not from watching

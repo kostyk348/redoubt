@@ -372,7 +372,7 @@ impl Guard {
 /// number, function, address, quantity) and to the value, so it cannot be lifted into another frame.
 pub fn dual_signature(key: &[u8; 32], header: &[u8], value: u16) -> Option<[u8; 32]> {
     let mut mac = Hmac::<Sha256>::new_from_slice(key).ok()?;
-    mac.update(b"OPLOT/1 dual");
+    mac.update(b"REDOUBT/1 dual");
     mac.update(header);
     mac.update(&value.to_be_bytes());
     let mut out = [0u8; 32];

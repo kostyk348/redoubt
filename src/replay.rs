@@ -205,7 +205,7 @@ impl CounterStore {
 
     fn mac(&self, boots: u32, previous: &[u8; 32]) -> Result<[u8; 32], ReplayError> {
         let mut mac = Hmac::<Sha256>::new_from_slice(&self.key).map_err(|error| ReplayError::Io(error.to_string()))?;
-        mac.update(b"OPLOT/1 counter");
+        mac.update(b"REDOUBT/1 counter");
         mac.update(&boots.to_be_bytes());
         mac.update(previous);
         let mut out = [0u8; 32];
@@ -219,7 +219,7 @@ impl CounterStore {
 /// here — the MAC already covers the content of the record that matters.
 pub fn record_digest(boots: u32, previous: &[u8; 32]) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hasher.update(b"OPLOT/1 digest");
+    hasher.update(b"REDOUBT/1 digest");
     hasher.update(boots.to_be_bytes());
     hasher.update(previous);
     let mut out = [0u8; 32];

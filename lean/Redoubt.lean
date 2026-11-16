@@ -1,19 +1,19 @@
 /-
-  ОПЛОТ/1 — the parts of the design that can be proved, proved.
+  РЕДУТ/1 — the parts of the design that can be proved, proved.
 
   What this file is: a small formal model of the decision core, and theorems about it. It is not a
   model of the cryptography (AES-GCM and X25519 are assumptions here, not subjects), and it is not a
   model of the Rust code — a proof here says "the rule set, the window and the bounds behave as
   claimed", not "the compiled binary is free of bugs". `SECURITY.md` says the same in prose.
 
-  Check: `lean lean/Oplot.lean` (Lean 4.35, no Mathlib).
+  Check: `lean lean/Redoubt.lean` (Lean 4.35, no Mathlib).
 -/
 
 open Classical
 
 set_option linter.deprecated false
 
-namespace Oplot
+namespace Redoubt
 
 /-! ## Verdicts and the things a verdict is about -/
 
@@ -276,25 +276,25 @@ theorem dual_keys_distinct (k₁ k₂ msg : Nat) (hk : k₁ ≠ k₂) :
   intro heq
   exact hk (by omega)
 
-end Oplot
+end Redoubt
 
 /-! ## The proof footprint
 
   These commands print what each theorem depends on. A theorem that printed `sorryAx` would be a
   hole; these do not. `propext` and `Classical.choice` are the ordinary classical axioms. -/
 
-#print axioms Oplot.deny_overrides
-#print axioms Oplot.no_allow_no_allowance
-#print axioms Oplot.allow_requires_a_rule
-#print axioms Oplot.dual_needs_a_dual_rule
-#print axioms Oplot.no_double_accept
-#print axioms Oplot.window_bounded
-#print axioms Oplot.last_address_inside
-#print axioms Oplot.payload_bounded
-#print axioms Oplot.dual_payload_exact
-#print axioms Oplot.boots_monotone
-#print axioms Oplot.boots_never_decrease
-#print axioms Oplot.dead_man_fires
-#print axioms Oplot.dead_man_quiet
-#print axioms Oplot.dead_man_fires_late
-#print axioms Oplot.dual_keys_distinct
+#print axioms Redoubt.deny_overrides
+#print axioms Redoubt.no_allow_no_allowance
+#print axioms Redoubt.allow_requires_a_rule
+#print axioms Redoubt.dual_needs_a_dual_rule
+#print axioms Redoubt.no_double_accept
+#print axioms Redoubt.window_bounded
+#print axioms Redoubt.last_address_inside
+#print axioms Redoubt.payload_bounded
+#print axioms Redoubt.dual_payload_exact
+#print axioms Redoubt.boots_monotone
+#print axioms Redoubt.boots_never_decrease
+#print axioms Redoubt.dead_man_fires
+#print axioms Redoubt.dead_man_quiet
+#print axioms Redoubt.dead_man_fires_late
+#print axioms Redoubt.dual_keys_distinct

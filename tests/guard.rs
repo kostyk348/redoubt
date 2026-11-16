@@ -3,9 +3,9 @@
 mod common;
 
 use common::{connect, header, pair, seal};
-use oplot::frame::{Frame, FLAG_CRITICAL, FLAG_DUAL, MAX_FRAME};
-use oplot::guard::{dual_signature, Decision, Guard, RoleKeys};
-use oplot::policy::{Policy, Role};
+use redoubt::frame::{Frame, FLAG_CRITICAL, FLAG_DUAL, MAX_FRAME};
+use redoubt::guard::{dual_signature, Decision, Guard, RoleKeys};
+use redoubt::policy::{Policy, Role};
 
 const OPERATOR_KEY: [u8; 32] = [11u8; 32];
 const SUPERVISOR_KEY: [u8; 32] = [22u8; 32];

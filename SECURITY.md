@@ -4,7 +4,7 @@
 
 1. **The decision core refuses by default.** Unauthenticated, replayed, unauthorised, unsigned and
    unloggable requests do not reach the PLC. This is tested (25 tests) and, for the model, proved in
-   Lean (`lean/Oplot.lean`, 11 theorems).
+   Lean (`lean/Redoubt.lean`, 11 theorems).
 2. **The cryptography is standard and borrowed.** X25519 (`x25519-dalek`), HKDF-SHA256 (`hkdf`,
    `sha2`), AES-256-GCM (`aes-gcm`), HMAC-SHA256 (`hmac`), constant-time comparison (`subtle`). The
    handshake follows the **Noise KK** token sequence.

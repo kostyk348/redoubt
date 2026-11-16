@@ -1,14 +1,14 @@
 [package]
-name = "oplot"
+name = "redoubt"
 version = "0.1.0"
 edition = "2021"
-description = "ОПЛОТ/1 — a fail-closed control channel for Modbus-era PLCs: Noise KK handshake, AEAD frames, replay windows that survive reboots, deny-overrides policy, dual control, reversible writes and a hash-chained audit log"
+description = "РЕДУТ/1 — a fail-closed control channel for Modbus-era PLCs: Noise KK handshake, AEAD frames, replay windows that survive reboots, deny-overrides policy, dual control, reversible writes and a hash-chained audit log"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/kostyk348/oplot"
+repository = "https://github.com/kostyk348/redoubt"
 rust-version = "1.80"
 
 [lib]
-name = "oplot"
+name = "redoubt"
 path = "src/lib.rs"
 
 [dependencies]

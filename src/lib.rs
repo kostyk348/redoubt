@@ -1,4 +1,4 @@
-//! ОПЛОТ/1 — a control channel that fails closed.
+//! РЕДУТ/1 — a control channel that fails closed.
 //!
 //! The design has one rule that outranks the rest: **anything that is not provably authorised does
 //! not reach the PLC, and what is refused leaves the process in a state it can survive**. Every

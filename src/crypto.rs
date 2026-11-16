@@ -37,8 +37,8 @@ pub const TAG: usize = 16;
 pub const MESSAGE: usize = KEY + TAG;
 /// The Noise protocol name, padded to the hash length as the specification requires.
 const PROTOCOL: &[u8; 32] = b"Noise_KK_25519_AESGCM_SHA256\0\0\0\0";
-/// Domain separation so an ОПЛОТ key cannot be mistaken for a key of some other protocol.
-const PROLOGUE: &[u8] = b"OPLOT/1";
+/// Domain separation so an РЕДУТ key cannot be mistaken for a key of some other protocol.
+const PROLOGUE: &[u8] = b"REDOUBT/1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CryptoError {
