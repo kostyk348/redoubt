@@ -120,7 +120,8 @@ ci/                 the same checks CI runs, for a local commit
 
 ## Documents
 
-- [Internet-Draft](draft/draft-kostyk-redoubt-00.txt) — `draft-kostyk-redoubt-00`
+- [Internet-Draft](draft/draft-kostyk-redoubt-00.xml) — published as `draft-kostyk-redoubt-00` (https://www.ietf.org/archive/id/draft-kostyk-redoubt-00.txt)
+- [Outreach](outreach/outreach.md) — ready-to-send texts: IOTOPS list, the Modbus serial-link authors, Modbus Organization, arXiv metadata
 - [SECURITY.md](SECURITY.md) — threat model, what is proved and what is not, how to report a problem
 - [lean/Redoubt.lean](lean/Redoubt.lean) — the proofs, with their axiom footprint
 
