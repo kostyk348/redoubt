@@ -1,0 +1,328 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE rfc SYSTEM "rfc2629-xhtml.ent">
+<rfc xmlns:xi="http://www.w3.org/2001/XInclude" ipr="trust200902" docName="draft-kostyk-redoubt-00" category="info" submissionType="IETF" consensus="false" xml:lang="en" version="3" tocInclude="true" symRefs="true" sortRefs="true">
+  <front>
+    <title abbrev="Redoubt/1">Redoubt/1: Authorised Control of Modbus-Era PLCs</title>
+    <author fullname="Konstantin Parashchuk" initials="K." surname="Parashchuk">
+      <address>
+        <postal>
+          <city>Saint Petersburg</city>
+          <country>Russian Federation</country>
+        </postal>
+        <email>lain90269@gmail.com</email>
+      </address>
+    </author>
+    <date year="2026" month="November" day="16"/>
+    <area>sec</area>
+    <abstract>
+      <t>This document specifies Redoubt/1, a control channel for programmable logic controllers that
+      sits in front of Modbus/TCP and decides, per operation, whether a request may reach the
+      controller. Modbus has no authentication, no authorisation and no replay protection; the
+      TLS-based Modbus Security profile adds a protected channel but still lets any authenticated
+      client invoke any function code. Redoubt/1 adds a decision per operation rather than per
+      connection, a replay window that survives a controller reboot, a three-valued outcome that can
+      drive outputs to a safe state instead of merely refusing, dual control for critical outputs,
+      reversible batches, and an audit chain that fails closed. The decision core is formalised in
+      Lean 4 and twenty of its properties are machine-checked; the proof artefacts are published with
+      the implementation.</t>
+    </abstract>
+  </front>
+
+  <middle>
+    <section anchor="intro">
+      <name>Introduction</name>
+      <t>Modbus/TCP carries no authentication, no integrity check and no notion of who is allowed to
+      do what. FrostyGoop, first described in 2024, was the first publicly analysed ICS malware that
+      spoke Modbus/TCP directly to manipulate a district-heating process; the affected site lost
+      heating for two days. In 2026 advisory AA26-097A described campaigns against internet-exposed
+      PLCs from several vendors, using malicious project files and manipulated HMI data, and pointed
+      at ports 44818, 2222, 102 and 502, that is, at the protocols themselves.</t>
+      <t>Two conclusions follow. Protecting the channel is necessary but not sufficient: a correctly
+      authenticated client can still write to the register that stops a pump. And the component that
+      decides what a client may do has to be as robust as the process it protects: available when the
+      network is not, honest when its own parts fail, and able to say "put it in a safe state" rather
+      than only "no".</t>
+      <t>Redoubt/1 is a guard that sits between the control network and the controller, a bump in the
+      wire. The controller is unmodified: plain Modbus/TCP on the south side, Redoubt/1 on the north
+      side. Every request passes seven gates in order, and a failure at any gate stops it:</t>
+      <ol>
+        <li>the frame authenticates and parses as exactly one known operation;</li>
+        <li>the frame belongs to the open session;</li>
+        <li>the frame number is fresh, given a 64-wide window and a persisted boot counter;</li>
+        <li>the policy allows this function, address span, unit and role, deny-overrides and
+        deny-by-default;</li>
+        <li>for critical outputs, two signatures from two different keys;</li>
+        <li>the decision can be recorded in the audit chain;</li>
+        <li>the write is applied and journalled with the values it overwrote, so that it can be
+        revoked.</li>
+      </ol>
+      <t>An eighth gate runs on a clock rather than on a request: if the supervisor stops sending
+      heartbeats, the guard writes the last-known-safe value to every output it has one for, and
+      records that it did.</t>
+    </section>
+
+    <section anchor="terms">
+      <name>Conventions and Terminology</name>
+      <t>The key words MUST, MUST NOT, REQUIRED, SHALL, SHOULD, SHOULD NOT, MAY and OPTIONAL are to be
+      interpreted as described in BCP 14 <xref target="RFC2119"/> <xref target="RFC8174"/>.</t>
+      <dl>
+        <dt>Operation:</dt>
+        <dd>a Modbus function code applied to an address span of a unit identifier.</dd>
+        <dt>Guard:</dt>
+        <dd>the entity that terminates Redoubt/1 and speaks Modbus/TCP to the controller.</dd>
+        <dt>Verdict:</dt>
+        <dd>one of ALLOW, DENY and SAFE. SAFE means do not apply the request, and drive the affected
+        outputs to the values provisioned for them.</dd>
+        <dt>Batch:</dt>
+        <dd>the set of writes produced by one operation, with the values they replaced.</dd>
+      </dl>
+    </section>
+
+    <section anchor="threat">
+      <name>Threat Model</name>
+      <t>In scope: an attacker who can reach the north side, replay recorded traffic, modify frames in
+      flight, hold a stolen operator credential, or tamper with the guard's own files; an insider who
+      is authorised to operate but not to perform a particular action; a network that is unavailable
+      or lying.</t>
+      <t>Out of scope: an attacker who controls the controller firmware; an attacker with physical
+      access to the guard memory while it runs; a supply chain that ships a malicious image; traffic
+      analysis resistance; and the security of the engineering workstation that produces project
+      files.</t>
+    </section>
+
+    <section anchor="frame">
+      <name>Frame Format</name>
+      <t>A frame is one 24-byte header, a payload of at most 250 bytes, and a 16-byte tag. The header
+      is the associated data of the AEAD, so a modified function code or address fails the tag rather
+      than being trusted.</t>
+      <artwork type="ascii-art" originalSrc=""><![CDATA[
+ 0        1      2      3       4..12      12..20     20..22   22..24
++--------+------+------+------+----------+----------+--------+-------+
+| version| flags| unit |  fc  | session  |   seq    |  addr  |  qty  |
++--------+------+------+------+----------+----------+--------+-------+
+| payload (0..250 bytes)                     | tag (16 bytes)         |
++--------------------------------------------+------------------------+
+]]></artwork>
+      <ul>
+        <li>version: 1. A different version is a different protocol, not a negotiation; there is no
+        version negotiation.</li>
+        <li>flags: bit 0 RESPONSE, bit 1 CRITICAL, bit 2 DUAL.</li>
+        <li>session: the 64-bit session identifier from the handshake.</li>
+        <li>seq: the frame number, starting at 1, unique per direction.</li>
+        <li>addr and qty: the Modbus address span; qty is bounded by 125 registers.</li>
+        <li>payload: the values for a write, or empty for a read. A single write that requests dual
+        control carries two bytes of value and two 32-byte signatures, 66 bytes in total.</li>
+        <li>tag: the AES-256-GCM tag over the header as associated data and the payload.</li>
+      </ul>
+      <t>Function codes 1, 2, 3, 4, 5, 6, 15 and 16 are understood. Any other function code is refused
+      by name: a guard that forwards unknown codes forwards the next one too.</t>
+      <t>The decoder MUST refuse a frame that is shorter than the header, longer than the budget, of
+      an unknown version, of an unknown function code, or whose payload length does not match the
+      function code and quantity. It MUST NOT allocate memory to do so.</t>
+    </section>
+
+    <section anchor="handshake">
+      <name>Handshake</name>
+      <t>Redoubt/1 uses the Noise KK pattern <xref target="NOISE"/> with X25519, SHA-256, HKDF-SHA256
+      and AES-256-GCM. Both peers know each other static public key before the first byte:
+      provisioning already holds a list of devices, and a plant at three in the morning has nobody to
+      ask.</t>
+      <artwork type="ascii-art" originalSrc=""><![CDATA[
+ initiator                                    responder
+ ---------                                    ---------
+ -> e, es, ss          ephemeral, DH(e_i, s_r), DH(s_i, s_r)
+ <- e, ee, se          ephemeral, DH(e_r, e_i), DH(e_r, s_i)
+ split                 two AES-256-GCM keys, one per direction
+]]></artwork>
+      <t>The prologue is the ASCII string REDOUBT/1 followed by the boot counter of
+      <xref target="replay"/> and the device identifiers of both peers, so a handshake cannot be
+      transplanted to another pair of devices or to another boot of the same device. Each handshake
+      message carries a 16-byte tag over the transcript; a peer that does not hold the static key its
+      public key claims fails at the first message.</t>
+      <t>After the split, the initiator send key is the responder receive key and the reverse. Frame
+      numbers in each direction MUST start at 1 and MUST NOT repeat; a session that would exhaust its
+      frame numbers MUST be re-keyed.</t>
+    </section>
+
+    <section anchor="replay">
+      <name>Replay Window and Boot Counter</name>
+      <t>A frame number is accepted once. The receiver keeps a 64-wide sliding window
+      <xref target="RFC4303"/>: a frame number above the highest is accepted unless it is zero, a
+      number below the highest is accepted if it is inside the window and was not seen before, and
+      everything below the window is refused.</t>
+      <t>A window in RAM is reset by a power cut, after which last week recorded frame is fresh again.
+      Redoubt/1 therefore keeps an engineBoots counter, as SNMPv3 does with engineBoots and engineTime
+      <xref target="RFC3414"/>, in an append-only file in which every record carries an HMAC over the
+      boots value and the previous record MAC, and links to the previous record. The counter is
+      incremented and flushed before a session starts. On start-up the chain is verified: a record
+      that does not verify, a chain that does not link, or a boots value that decreases is treated as
+      tampering and the guard MUST refuse to serve. A truncation of the whole file is
+      indistinguishable from a fresh installation, and for that case the guard compares its counter
+      against a value held by the supervisor.</t>
+    </section>
+
+    <section anchor="policy">
+      <name>Policy Language</name>
+      <t>A policy is a text file of rule lines. Deny-overrides applies: a denial anywhere beats an
+      allowance anywhere, and a request that no rule allows is denied. Order-dependent allow-lists are
+      how people ship holes, so order carries no authority here.</t>
+      <artwork type="ascii-art" originalSrc=""><![CDATA[
+allow fc in {3,4}  addr 0..499       role reader
+allow fc 6         addr 40001..40010 role operator value in 0..1000
+allow fc in {5,15} addr 100..199     role supervisor dual
+deny  fc in {5,6,15,16} addr 0..99
+safe  fc 6         addr 500..599
+]]></artwork>
+      <t>A rule matches when every condition matches. fc is a set of function codes; addr is a span
+      that MUST contain the whole requested span, not merely its first address; role is a floor, so a
+      supervisor satisfies an operator rule and an operator does not satisfy a supervisor rule; value
+      bounds the value of a single write; dual marks the operations that need two signatures.</t>
+      <t>A policy that fails to parse MUST be rejected as a whole: a guard that skips an unparsable
+      line is a guard that silently allows something.</t>
+    </section>
+
+    <section anchor="dual">
+      <name>Dual Control</name>
+      <t>For an operation marked dual, the frame carries two signatures over the header and the value:
+      one produced with the operator key and one with the supervisor key. Both MUST verify, and both
+      MUST be present: a single signature repeated twice does not satisfy the rule, because the two
+      keys are different and the signatures over the same input differ.</t>
+      <t>The signatures cover the whole header, including the session identifier, the frame number,
+      the function code, the address and the quantity. A signature obtained for one operation
+      therefore cannot be lifted into another: changing the address invalidates it.</t>
+      <t>If a dual operation arrives without dual control, or with a signature that does not verify,
+      the verdict is SAFE, not DENY: an output that was about to be changed and cannot be authorised
+      must be driven to its provisioned value, not left in whatever state the last authorised write
+      left it.</t>
+    </section>
+
+    <section anchor="revoke">
+      <name>Reversible Batches</name>
+      <t>Every applied operation records, for each address it touched, the value that was there
+      before. The set of address and previous-value pairs is a batch, identified by a batch number. A
+      revocation writes those values back and records the revocation in the audit chain.</t>
+      <t>The guard SHOULD keep at least the seventy-two most recent batches and MUST keep every batch
+      that touched an output provisioned as safe. A guard that cannot record the previous values MUST
+      NOT perform the write: an irreversible control action is indistinguishable, after the fact, from
+      sabotage.</t>
+    </section>
+
+    <section anchor="audit">
+      <name>Audit Chain</name>
+      <t>Each audit record hash covers the previous record hash and the record own text. Periodically
+      the guard signs the current hash with a key that is not stored in the log itself, producing a
+      checkpoint. A verifier recomputes the chain and the checkpoints; a modified record breaks every
+      hash after it, and a removed record breaks a checkpoint.</t>
+      <t>The log is a precondition, not a side effect: if the record cannot be written, the operation
+      it describes MUST NOT be performed. A control action nobody can prove afterwards is an action
+      that did not happen.</t>
+    </section>
+
+    <section anchor="deadman">
+      <name>Dead-Man Timer</name>
+      <t>The supervisor sends a heartbeat over the same channel. If no authenticated frame has been
+      seen for longer than the configured timeout, the guard writes its provisioned safe values to
+      every output that has one and records the event. A guard that has never heard a heartbeat at all
+      MUST behave the same way: absence of evidence is not evidence of safety.</t>
+    </section>
+
+    <section anchor="formal">
+      <name>Formal Verification</name>
+      <t>The decision core is modelled in Lean 4 and the following statements are machine-checked, with
+      the axiom footprint printed by the checker (propext, choice and Quot.sound only, and no
+      sorryAx): deny_overrides, no_allow_no_allowance, allow_requires_a_rule, dual_needs_a_dual_rule,
+      no_double_accept, window_bounded, last_address_inside, payload_bounded, dual_payload_exact,
+      boots_monotone, boots_never_decrease, dead_man_fires, dead_man_quiet, dead_man_fires_late,
+      dual_keys_distinct, get_set_same, restore_previous, no_write_without_allow,
+      allow_through_all_gates, denial_leaves_memory.</t>
+      <t>Of these, allow_through_all_gates is the one that matters most: an ALLOW verdict implies every
+      gate was passed. The model is not the implementation, and the cryptography is an assumption
+      rather than a subject of the proof; <xref target="security"/> says so explicitly.</t>
+    </section>
+
+    <section anchor="security">
+      <name>Security Considerations</name>
+      <t>This protocol does not make a controller secure. It makes the path through the guard
+      decidable: unauthorised, replayed, unsigned or unrecordable requests do not reach the
+      controller. It does not:</t>
+      <ul>
+        <li>protect a controller reachable by other paths, which is why the guard MUST be the only path
+        and segmentation remains mandatory;</li>
+        <li>protect against a malicious project file that an engineer signs, which is the technique
+        described in AA26-097A;</li>
+        <li>provide confidentiality on serial links at 9600 bit/s: the serial profile carries integrity
+        and authenticity, and encryption is an optional profile;</li>
+        <li>defend against a compromised controller firmware;</li>
+        <li>replace key management, since provisioning, revoking and rotating static keys is out of
+        scope and is where deployments fail;</li>
+        <li>claim side-channel resistance: tag comparisons are constant-time, the higher layers make no
+        such claim.</li>
+      </ul>
+      <t>The guard is a single point of failure by construction and SHOULD be deployed in pairs, with
+      the two guards required to agree before a write is applied; a disagreement is a SAFE event.</t>
+      <t>The handshake has been cross-checked against a reference implementation of Noise: the
+      initiator of this document completes a handshake with the snow responder and transport messages
+      decrypt in both directions. Two deviations were found and fixed by that check, the prologue was
+      hashed in two pieces instead of one, and the pre-message public keys were not folded into the
+      transcript. Implementers SHOULD still prefer an existing Noise implementation to the reference
+      code.</t>
+    </section>
+
+    <section anchor="iana">
+      <name>IANA Considerations</name>
+      <t>This document has no IANA actions. It registers no URN namespace, no port and no media type; a
+      deployment chooses its own transport binding.</t>
+    </section>
+  </middle>
+
+  <back>
+    <references>
+      <name>References</name>
+      <references>
+        <name>Normative References</name>
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.2119.xml"/>
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8174.xml"/>
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.4303.xml"/>
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.3414.xml"/>
+        <reference anchor="NOISE" target="https://noiseprotocol.org/noise.html">
+          <front>
+            <title>The Noise Protocol Framework</title>
+            <author initials="T." surname="Perrin" fullname="Trevor Perrin"><organization/></author>
+            <date year="2018"/>
+          </front>
+        </reference>
+      </references>
+      <references>
+        <name>Informative References</name>
+        <reference anchor="MODBUS" target="https://modbus.org/docs/Modbus_Application_Protocol_V1_1b3.pdf">
+          <front>
+            <title>MODBUS Application Protocol Specification V1.1b3</title>
+            <author><organization>Modbus Organization</organization></author>
+            <date year="2012"/>
+          </front>
+        </reference>
+        <reference anchor="MBSSEC" target="https://modbus.org/file/secure/modbussecurityprotocol.pdf">
+          <front>
+            <title>MODBUS/TCP Security Protocol Specification</title>
+            <author><organization>Modbus Organization</organization></author>
+            <date year="2018"/>
+          </front>
+        </reference>
+        <reference anchor="AA26-097A" target="https://www.cisa.gov/news-events/cybersecurity-advisories/aa26-097a">
+          <front>
+            <title>Iranian-Affiliated Cyber Actors Exploit Programmable Logic Controllers Across US Critical Infrastructure</title>
+            <author><organization>CISA</organization></author>
+            <date year="2026"/>
+          </front>
+        </reference>
+        <reference anchor="FROSTY" target="https://www.dragos.com/blog/protect-against-frostygoop-ics-malware-targeting-operational-technology">
+          <front>
+            <title>FrostyGoop: ICS Malware Targeting Operational Technology</title>
+            <author><organization>Dragos</organization></author>
+            <date year="2024"/>
+          </front>
+        </reference>
+      </references>
+    </references>
+  </back>
+</rfc>
