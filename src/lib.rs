@@ -49,6 +49,10 @@ pub mod guard;
 pub mod policy;
 pub mod replay;
 
+/// Kani harnesses, compiled only under `cargo kani` — proofs over the code, not over the model.
+#[cfg(kani)]
+mod kani_proofs;
+
 pub use audit::{AuditError, AuditLog};
 pub use crypto::{Handshake, KeyPair, Session};
 pub use frame::{Frame, FrameError, FrameHeader, Opcode};

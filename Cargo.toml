@@ -3,7 +3,7 @@ name = "redoubt"
 version = "0.1.0"
 edition = "2021"
 description = "РЕДУТ/1 — a fail-closed control channel for Modbus-era PLCs: Noise KK handshake, AEAD frames, replay windows that survive reboots, deny-overrides policy, dual control, reversible writes and a hash-chained audit log"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 repository = "https://github.com/kostyk348/redoubt"
 rust-version = "1.80"
 

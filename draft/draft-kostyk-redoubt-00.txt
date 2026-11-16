@@ -1,5 +1,5 @@
 Network Working Group                                          K. Parashchuk
-Internet-Draft                                                      Teplomash
+Internet-Draft                                             K. Parashchuk
 Intended status: Informational                              16 November 2026
 Expires: 20 May 2027
 
@@ -387,8 +387,8 @@ Table of Contents
 Authors' Addresses
 
    Konstantin Parashchuk
-   Teplomash
+
    Saint Petersburg
    Russian Federation
 
-   Email: kostyk348@users.noreply.github.com
+   Email: (to be provided by the author before submission)
