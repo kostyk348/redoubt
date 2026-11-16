@@ -276,7 +276,6 @@ theorem dual_keys_distinct (k₁ k₂ msg : Nat) (hk : k₁ ≠ k₂) :
   intro heq
   exact hk (by omega)
 
-end Redoubt
 
 /-! ## The proof footprint
 
@@ -298,3 +297,144 @@ end Redoubt
 #print axioms Redoubt.dead_man_quiet
 #print axioms Redoubt.dead_man_fires_late
 #print axioms Redoubt.dual_keys_distinct
+
+/-! ## 12–15. The whole decision, and the memory it writes to -/
+
+/-- The PLC's memory, as an association list: registers and coils are both (address, value). -/
+abbrev Memory := List (Nat × Nat)
+
+def memGet : Memory → Nat → Option Nat
+  | [], _ => none
+  | (k, v) :: rest, a => if k = a then some v else memGet rest a
+
+def memSet : Memory → Nat → Nat → Memory
+  | [], a, v => [(a, v)]
+  | (k, w) :: rest, a, v => if k = a then (k, v) :: rest else (k, w) :: memSet rest a v
+
+/-- **Writing a value and reading it back gives that value.** The trivial statement that makes the
+guard's writes trustworthy. -/
+theorem get_set_same (l : Memory) (a v : Nat) : memGet (memSet l a v) a = some v := by
+  induction l with
+  | nil => simp [memGet, memSet]
+  | cons head rest ih =>
+    obtain ⟨k, w⟩ := head
+    by_cases h : k = a
+    · simp [memSet, memGet, h]
+    · simp [memSet, memGet, h, ih]
+
+/-- **Undoing a write restores what was there before.** This is what `revoke` is made of: the guard
+remembers the old value, and putting it back is a `memSet` with that value. -/
+theorem restore_previous (l : Memory) (a old fresh : Nat) :
+    memGet (memSet (memSet l a fresh) a old) a = some old := by
+  rw [get_set_same]
+
+/-- What the guard learned before it decided — the seven gates as booleans and a verdict. -/
+structure Gates where
+  authenticated : Bool
+  sameSession : Bool
+  fresh : Bool
+  policy : Verdict
+  dualRequired : Bool
+  dualVerified : Bool
+  logged : Bool
+
+inductive Decision where
+  | allow : Nat → Decision
+  | denied : String → Decision
+  | safe : String → Decision
+  deriving DecidableEq, Repr
+
+/-- The seven gates in order. Everything after a failed gate is not consulted. -/
+def proceed (g : Gates) : Decision :=
+  if g.authenticated = false then Decision.denied "gate 1: the frame did not authenticate"
+  else if g.sameSession = false then Decision.denied "gate 2: another session"
+  else if g.fresh = false then Decision.denied "gate 3: replayed or outside the window"
+  else match g.policy with
+    | Verdict.denied why => Decision.denied why
+    | Verdict.safe why => Decision.safe why
+    | Verdict.allow _ =>
+      if g.dualRequired = true then
+        (if g.dualVerified = true then
+          (if g.logged = true then Decision.allow 1 else Decision.denied "gate 6: the log is unwritable")
+         else Decision.safe "gate 5: dual control did not verify")
+      else (if g.logged = true then Decision.allow 1 else Decision.denied "gate 6: the log is unwritable")
+
+/-- The write itself: only `allow` touches the PLC. -/
+def step (memory : Memory) (written : Memory) : Decision → Memory
+  | Decision.allow _ => written
+  | Decision.denied _ => memory
+  | Decision.safe _ => memory
+
+/-- **Nothing is written unless the verdict is `allow`.** Denials and safe substitutions leave the
+memory exactly as it was; the safe values are written by a separate, audited path. -/
+theorem no_write_without_allow (memory written : Memory) (d : Decision)
+    (h : ∀ n, d ≠ Decision.allow n) : step memory written d = memory := by
+  cases d with
+  | allow n => exact absurd rfl (h n)
+  | denied why => rfl
+  | safe why => rfl
+
+/-- **An `allow` verdict means all seven gates were passed.** The theorem that turns "seven gates"
+from a diagram into a statement. -/
+theorem allow_through_all_gates (g : Gates) (b : Nat) (h : proceed g = Decision.allow b) :
+    g.authenticated = true ∧ g.sameSession = true ∧ g.fresh = true ∧ g.logged = true ∧
+    (g.dualRequired = true → g.dualVerified = true) := by
+  unfold proceed at h
+  by_cases h1 : g.authenticated = false
+  · rw [if_pos h1] at h; exact absurd h (by simp)
+  · rw [if_neg h1] at h
+    have hauth : g.authenticated = true := by
+      cases hv : g.authenticated with
+      | true => rfl
+      | false => exact absurd hv h1
+    by_cases h2 : g.sameSession = false
+    · rw [if_pos h2] at h; exact absurd h (by simp)
+    · rw [if_neg h2] at h
+      have hsession : g.sameSession = true := by
+        cases hv : g.sameSession with
+        | true => rfl
+        | false => exact absurd hv h2
+      by_cases h3 : g.fresh = false
+      · rw [if_pos h3] at h; exact absurd h (by simp)
+      · rw [if_neg h3] at h
+        have hfresh : g.fresh = true := by
+          cases hv : g.fresh with
+          | true => rfl
+          | false => exact absurd hv h3
+        cases hp : g.policy with
+        | denied why => rw [hp] at h; exact absurd h (by simp)
+        | safe why => rw [hp] at h; exact absurd h (by simp)
+        | allow d =>
+          rw [hp] at h
+          by_cases hd : g.dualRequired = true
+          · rw [if_pos hd] at h
+            by_cases hv : g.dualVerified = true
+            · rw [if_pos hv] at h
+              by_cases hl : g.logged = true
+              · rw [if_pos hl] at h
+                exact ⟨hauth, hsession, hfresh, hl, fun _ => hv⟩
+              · rw [if_neg hl] at h; exact absurd h (by simp)
+            · rw [if_neg hv] at h; exact absurd h (by simp)
+          · rw [if_neg hd] at h
+            by_cases hl : g.logged = true
+            · rw [if_pos hl] at h
+              exact ⟨hauth, hsession, hfresh, hl, fun hcontra => absurd hcontra hd⟩
+            · rw [if_neg hl] at h; exact absurd h (by simp)
+
+/-- The gate set that a refusal sees: everything passed except the policy, which said no. -/
+def allGatesDenied (why : String) : Gates :=
+  { authenticated := true, sameSession := true, fresh := true, policy := Verdict.denied why, dualRequired := false, dualVerified := false, logged := true }
+
+/-- **A refusal is a refusal, not a partial write**: the memory after a denied decision is the memory
+before it. -/
+theorem denial_leaves_memory (memory written : Memory) (why : String) :
+    step memory written (proceed (allGatesDenied why)) = memory := by
+  simp [allGatesDenied, proceed, step]
+
+end Redoubt
+
+#print axioms Redoubt.get_set_same
+#print axioms Redoubt.restore_previous
+#print axioms Redoubt.no_write_without_allow
+#print axioms Redoubt.allow_through_all_gates
+#print axioms Redoubt.denial_leaves_memory
