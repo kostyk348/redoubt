@@ -93,6 +93,40 @@ pub struct Policy {
     rules: Vec<Rule>,
 }
 
+#[cfg(kani)]
+impl Rule {
+    /// Правило без разбора текста — только для kani-харнессов.
+    pub(crate) fn for_proof(
+        kind: Kind,
+        functions: Vec<u8>,
+        address: Option<(u16, u16)>,
+        role: Option<Role>,
+        dual: bool,
+    ) -> Self {
+        Self {
+            kind,
+            functions,
+            units: None,
+            address,
+            role,
+            value: None,
+            dual,
+        }
+    }
+}
+
+#[cfg(kani)]
+impl Policy {
+    /// Политика из готовых правил, без разбора строки.
+    ///
+    /// Зачем: под CBMC разбор текста раскручивает `memchr` внутри `str::lines/split` на тысячи
+    /// итераций, и доказательство `evaluate` не закрывалось вовсе. Сам парсер проверяется
+    /// обычными тестами (`policy::tests`), харнесс же должен рассуждать о `evaluate`.
+    pub(crate) fn for_proof(rules: Vec<Rule>) -> Self {
+        Self { rules }
+    }
+}
+
 impl Policy {
     pub fn parse(text: &str) -> Result<Self, PolicyError> {
         let mut rules = Vec::new();

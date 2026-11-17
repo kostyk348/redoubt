@@ -5,7 +5,7 @@
 //! machine code paths — every length, every byte value, no sampling.
 
 use crate::frame::{expected_payload, FrameHeader, Opcode, MAX_PAYLOAD};
-use crate::policy::{Policy, Request, Role, Verdict};
+use crate::policy::{Kind, Policy, Request, Role, Rule, Verdict};
 
 /// **Decoding an arbitrary header never panics and never asks for more than the payload budget.**
 #[kani::proof]
@@ -26,41 +26,38 @@ fn header_decoding_is_total_and_bounded() {
 /// **Every bounded request gets exactly one verdict, and `allow` is impossible outside the
 /// rule's range.**
 ///
-/// Раньше харнесс передавал в `evaluate` неограниченные `addr`/`qty`, и CBMC тонул: поиск байта
-/// в std раскручивался на 4500+ итераций, джоба убивалась по лимиту (5 ч 31 мин).
-/// Теперь вход ограничен тем, что действительно возможно в протоколе:
+/// История: харнесс сначала передавал в `evaluate` неограниченные `addr`/`qty` — CBMC раскручивал
+/// поиск байта в std на 4500+ итераций и джоба убивалась по лимиту (5 ч 31 мин). Ограничение
+/// входа помогло лишь частично: основное время уходило в `Policy::parse` (тот же `memchr` в
+/// `str::split`). Поэтому политика теперь собирается конструктором `for_proof` — харнесс
+/// доказывает свойство `evaluate`, а парсер покрыт обычными тестами.
 ///
-///   * `qty` — от 1 до 8 (бюджет транзакции, как в спецификации кадра);
-///   * `addr + qty - 1` не выходит за 16-битное адресное пространство;
-///   * `addr` — окно вокруг границ правила (39995..40015): свойство «снаружи нет allow»
-///     проверяется именно на краях диапазона, а полный 16-битный поиск CBMC не осиливает;
-///   * `value` фиксирован: правила этой политики не ограничивают значение, символический
-///     `value` только раздувал пространство состояний.
-///
-/// Проверяется не «функция не падает», а содержательное свойство политики: если запрос целиком
-/// не попадает в диапазон правила `allow fc 6 addr 40001..40010`, разрешающего вердикта быть
-/// не может (правило требует, чтобы весь интервал лежал внутри диапазона).
+/// Проверяется содержательное свойство: если запрос целиком не попадает в диапазон правила
+/// `allow fc 6 addr 40001..40010`, разрешающего вердикта быть не может (правило требует, чтобы
+/// весь интервал лежал внутри диапазона).
 #[kani::proof]
 #[kani::unwind(24)]
 fn policy_evaluation_is_total() {
-    let policy = match Policy::parse(
-        "allow fc 6 addr 40001..40010 role operator
-safe fc 6 addr 500..599
-",
-    ) {
-        Ok(policy) => policy,
-        // Константа заведомо валидна; если это не так — падать в доказательстве незачем,
-        // об этом скажет обычный тест policy::tests.
-        Err(_) => return,
-    };
+    let policy = Policy::for_proof(vec![
+        Rule::for_proof(
+            Kind::Allow,
+            vec![6],
+            Some((40001, 40010)),
+            Some(Role::Operator),
+            false,
+        ),
+        Rule::for_proof(Kind::Safe, vec![6], Some((500, 599)), None, false),
+    ]);
 
     let fc: u8 = kani::any();
     let addr: u16 = kani::any();
     let qty: u16 = kani::any();
     let value: u16 = 0;
 
+    // Окно вокруг границ правила: свойство проверяется именно на краях диапазона,
+    // полный 16-битный поиск CBMC не осиливает.
     kani::assume(qty >= 1 && qty <= 8);
-    kani::assume(addr >= 39995 && addr <= 40015); // окно вокруг границ правила
+    kani::assume(addr >= 39995 && addr <= 40015);
     kani::assume((addr as u32) + (qty as u32) - 1 <= 65535);
 
     let request = Request {
