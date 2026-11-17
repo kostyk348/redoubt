@@ -56,6 +56,8 @@ mod kani_proofs;
 pub use audit::{AuditError, AuditLog};
 pub use crypto::{Handshake, KeyPair, Session};
 pub use frame::{Frame, FrameError, FrameHeader, Opcode};
-pub use guard::{dual_signature, Clock, Decision, FixedClock, Guard, PlcMemory, RoleKeys, RECEIVE_BUFFER};
+pub use guard::{
+    dual_signature, Clock, Decision, FixedClock, Guard, PlcMemory, RoleKeys, RECEIVE_BUFFER,
+};
 pub use policy::{Policy, PolicyError, Request, Role, Verdict};
 pub use replay::{CounterStore, ReplayError, ReplayWindow};

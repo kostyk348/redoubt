@@ -15,7 +15,10 @@ fn make_guard(policy: &str) -> Guard {
     let mut guard = Guard::new(
         policy,
         [33u8; 32],
-        RoleKeys { operator: OPERATOR_KEY, supervisor: SUPERVISOR_KEY },
+        RoleKeys {
+            operator: OPERATOR_KEY,
+            supervisor: SUPERVISOR_KEY,
+        },
         1_000,
     );
     guard.provision_safe(1, 40001, 0);
@@ -36,11 +39,17 @@ fn an_authorised_write_is_applied_and_can_be_revoked() {
 
     let frame = write_frame(1, 40001, 42, 0);
     let (mut buffer, length) = seal(&frame, &mut client);
-    assert!(matches!(guard.handle(&mut buffer, length, 10), Decision::Allow { .. }));
+    assert!(matches!(
+        guard.handle(&mut buffer, length, 10),
+        Decision::Allow { .. }
+    ));
     assert_eq!(guard.plc().get(1, 40001), 42);
 
     let decision = guard.handle(&mut buffer, length, 10);
-    assert!(matches!(decision, Decision::Deny(_)), "the same frame twice is a replay");
+    assert!(
+        matches!(decision, Decision::Deny(_)),
+        "the same frame twice is a replay"
+    );
 
     let frame = write_frame(2, 40002, 7, 0);
     let (mut buffer, length) = seal(&frame, &mut client);
@@ -50,7 +59,11 @@ fn an_authorised_write_is_applied_and_can_be_revoked() {
     assert_eq!(guard.plc().get(1, 40002), 7);
 
     assert_eq!(guard.revoke(batch).expect("revoke"), 1);
-    assert_eq!(guard.plc().get(1, 40002), 0, "revoking restores the value it overwrote");
+    assert_eq!(
+        guard.plc().get(1, 40002),
+        0,
+        "revoking restores the value it overwrote"
+    );
     assert_eq!(guard.plc().get(1, 40001), 42, "and nothing else");
 }
 
@@ -82,7 +95,11 @@ fn a_critical_write_without_two_people_goes_to_the_safe_value() {
     let (mut buffer, length) = seal(&frame, &mut client);
     let decision = guard.handle(&mut buffer, length, 10);
     assert!(matches!(decision, Decision::Safe(_)), "{decision:?}");
-    assert_eq!(guard.plc().get(1, 40001), 0, "the safe value, not the requested one");
+    assert_eq!(
+        guard.plc().get(1, 40001),
+        0,
+        "the safe value, not the requested one"
+    );
 }
 
 #[test]
@@ -96,7 +113,8 @@ fn a_critical_write_with_two_different_signatures_is_applied() {
     let header = header(1, 6, 40001, 1, FLAG_CRITICAL | FLAG_DUAL);
     let header_bytes = header.encode();
     let operator = dual_signature(&OPERATOR_KEY, &header_bytes, value).expect("operator signature");
-    let supervisor = dual_signature(&SUPERVISOR_KEY, &header_bytes, value).expect("supervisor signature");
+    let supervisor =
+        dual_signature(&SUPERVISOR_KEY, &header_bytes, value).expect("supervisor signature");
 
     let mut payload = Vec::new();
     payload.extend_from_slice(&value.to_be_bytes());
@@ -130,7 +148,10 @@ fn one_person_signing_twice_is_not_two_people() {
     let frame = Frame::new(header, &payload).expect("frame");
     let (mut buffer, length) = seal(&frame, &mut client);
     let decision = guard.handle(&mut buffer, length, 10);
-    assert!(matches!(decision, Decision::Safe(_)), "two roles, two keys: {decision:?}");
+    assert!(
+        matches!(decision, Decision::Safe(_)),
+        "two roles, two keys: {decision:?}"
+    );
     assert_eq!(guard.plc().get(1, 40001), 0);
 }
 
@@ -171,7 +192,11 @@ fn the_dead_man_timer_drives_every_output_safe() {
     let decision = guard.tick(0);
     assert!(matches!(decision, Decision::Safe(_)), "{decision:?}");
     assert_eq!(guard.plc().get(1, 40001), 0);
-    assert_eq!(guard.plc().get(1, 40005), 3, "every provisioned output is driven safe");
+    assert_eq!(
+        guard.plc().get(1, 40005),
+        3,
+        "every provisioned output is driven safe"
+    );
 
     // A heartbeat inside the window keeps the guard quiet.
     assert!(matches!(guard.tick(0), Decision::Safe(_)));
@@ -188,13 +213,18 @@ fn random_bytes_never_panic_and_never_authenticate() {
     for length in 0..=(MAX_FRAME + 8) {
         let mut buffer = [0u8; MAX_FRAME + 8];
         for slot in buffer.iter_mut().take(length) {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             *slot = (state >> 33) as u8;
         }
         // Either it refuses, or — by astronomically unlikely chance — it accepts something that
         // passed AES-GCM. It must never panic, and it must never accept with a valid tag here.
         if let Ok(frame) = Frame::open(&mut buffer, length, &mut server) {
-            panic!("random bytes authenticated as fc={} addr={}", frame.header.fc, frame.header.addr);
+            panic!(
+                "random bytes authenticated as fc={} addr={}",
+                frame.header.fc, frame.header.addr
+            );
         }
     }
 }

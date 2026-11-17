@@ -14,7 +14,10 @@ fn header_decoding_is_total_and_bounded() {
     if let Ok(header) = FrameHeader::decode(&bytes) {
         if let Ok(opcode) = Opcode::from_function(header.fc) {
             if let Ok(size) = expected_payload(opcode, header.qty, header.wants_dual()) {
-                kani::assert(size <= MAX_PAYLOAD, "a validated payload must fit the budget");
+                kani::assert(
+                    size <= MAX_PAYLOAD,
+                    "a validated payload must fit the budget",
+                );
             }
         }
     }
@@ -27,8 +30,17 @@ fn policy_evaluation_is_total() {
     let addr: u16 = kani::any();
     let qty: u16 = kani::any();
     let value: u16 = kani::any();
-    if let Ok(policy) = Policy::parse("allow fc 6 addr 40001..40010 role operator\nsafe fc 6 addr 500..599\n") {
-        let request = Request { fc, unit: 1, addr, qty, value: Some(value), role: Role::Operator };
+    if let Ok(policy) =
+        Policy::parse("allow fc 6 addr 40001..40010 role operator\nsafe fc 6 addr 500..599\n")
+    {
+        let request = Request {
+            fc,
+            unit: 1,
+            addr,
+            qty,
+            value: Some(value),
+            role: Role::Operator,
+        };
         let _verdict = policy.evaluate(&request);
     }
 }

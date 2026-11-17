@@ -35,9 +35,15 @@ pub enum ReplayError {
     /// Frame zero is reserved: it belongs to no session.
     Zero,
     /// The counter file does not form a valid chain.
-    Tampered { line: usize, reason: String },
+    Tampered {
+        line: usize,
+        reason: String,
+    },
     /// The counter went backwards relative to an anchor somebody else kept.
-    Rollback { stored: u32, anchor: u32 },
+    Rollback {
+        stored: u32,
+        anchor: u32,
+    },
     Io(String),
 }
 
@@ -47,9 +53,14 @@ impl std::fmt::Display for ReplayError {
             ReplayError::Duplicate(seq) => write!(f, "frame {seq} was already accepted"),
             ReplayError::TooOld(seq) => write!(f, "frame {seq} is outside the replay window"),
             ReplayError::Zero => write!(f, "frame number zero is reserved"),
-            ReplayError::Tampered { line, reason } => write!(f, "counter file line {line}: {reason}"),
+            ReplayError::Tampered { line, reason } => {
+                write!(f, "counter file line {line}: {reason}")
+            }
             ReplayError::Rollback { stored, anchor } => {
-                write!(f, "counter rolled back: file says {stored}, supervisor has seen {anchor}")
+                write!(
+                    f,
+                    "counter rolled back: file says {stored}, supervisor has seen {anchor}"
+                )
             }
             ReplayError::Io(error) => write!(f, "{error}"),
         }
@@ -71,12 +82,18 @@ impl Default for ReplayWindow {
 
 impl ReplayWindow {
     pub fn new() -> Self {
-        Self { highest: 0, seen: 0 }
+        Self {
+            highest: 0,
+            seen: 0,
+        }
     }
 
     /// After a restart, start from the persisted floor: nothing at or below it is fresh.
     pub fn from_highest(highest: u64) -> Self {
-        Self { highest, seen: u64::MAX }
+        Self {
+            highest,
+            seen: u64::MAX,
+        }
     }
 
     pub fn highest(&self) -> u64 {
@@ -92,7 +109,11 @@ impl ReplayWindow {
             let shift = seq - self.highest;
             // Bit zero belongs to the new highest frame; the frames that were skipped land in the
             // bits above it as zeros, which is exactly what "not seen" means.
-            self.seen = if shift >= 64 { 1 } else { (self.seen << shift) | 1 };
+            self.seen = if shift >= 64 {
+                1
+            } else {
+                (self.seen << shift) | 1
+            };
             self.highest = seq;
             return Ok(());
         }
@@ -122,11 +143,18 @@ impl CounterStore {
     /// Open (or create) the counter file and verify the whole chain before anyone trusts it.
     pub fn open(path: impl Into<PathBuf>, key: [u8; 32]) -> Result<Self, ReplayError> {
         let path = path.into();
-        let mut store = Self { path, key, boots: 0, head: [0u8; 32], records: 0 };
+        let mut store = Self {
+            path,
+            key,
+            boots: 0,
+            head: [0u8; 32],
+            records: 0,
+        };
         if !store.path.exists() {
             return Ok(store);
         }
-        let file = std::fs::File::open(&store.path).map_err(|error| ReplayError::Io(error.to_string()))?;
+        let file =
+            std::fs::File::open(&store.path).map_err(|error| ReplayError::Io(error.to_string()))?;
         let mut previous = [0u8; 32];
         for (index, line) in BufReader::new(file).lines().enumerate() {
             let line_number = index + 1;
@@ -136,24 +164,54 @@ impl CounterStore {
                 continue;
             }
             let mut parts = line.split(' ');
-            let boots_text = parts.next().ok_or_else(|| ReplayError::Tampered { line: line_number, reason: "no boots field".into() })?;
-            let head_text = parts.next().ok_or_else(|| ReplayError::Tampered { line: line_number, reason: "no chain field".into() })?;
-            let mac_text = parts.next().ok_or_else(|| ReplayError::Tampered { line: line_number, reason: "no MAC field".into() })?;
+            let boots_text = parts.next().ok_or_else(|| ReplayError::Tampered {
+                line: line_number,
+                reason: "no boots field".into(),
+            })?;
+            let head_text = parts.next().ok_or_else(|| ReplayError::Tampered {
+                line: line_number,
+                reason: "no chain field".into(),
+            })?;
+            let mac_text = parts.next().ok_or_else(|| ReplayError::Tampered {
+                line: line_number,
+                reason: "no MAC field".into(),
+            })?;
             if parts.next().is_some() {
-                return Err(ReplayError::Tampered { line: line_number, reason: "extra fields".into() });
+                return Err(ReplayError::Tampered {
+                    line: line_number,
+                    reason: "extra fields".into(),
+                });
             }
-            let boots: u32 = boots_text.parse().map_err(|_| ReplayError::Tampered { line: line_number, reason: "boots is not a number".into() })?;
-            let head = decode_hex(head_text).ok_or_else(|| ReplayError::Tampered { line: line_number, reason: "chain is not 32 hex bytes".into() })?;
-            let mac = decode_hex(mac_text).ok_or_else(|| ReplayError::Tampered { line: line_number, reason: "MAC is not 32 hex bytes".into() })?;
+            let boots: u32 = boots_text.parse().map_err(|_| ReplayError::Tampered {
+                line: line_number,
+                reason: "boots is not a number".into(),
+            })?;
+            let head = decode_hex(head_text).ok_or_else(|| ReplayError::Tampered {
+                line: line_number,
+                reason: "chain is not 32 hex bytes".into(),
+            })?;
+            let mac = decode_hex(mac_text).ok_or_else(|| ReplayError::Tampered {
+                line: line_number,
+                reason: "MAC is not 32 hex bytes".into(),
+            })?;
             if head != previous {
-                return Err(ReplayError::Tampered { line: line_number, reason: "chain does not link to the previous record".into() });
+                return Err(ReplayError::Tampered {
+                    line: line_number,
+                    reason: "chain does not link to the previous record".into(),
+                });
             }
             let expected = store.mac(boots, &previous)?;
             if expected != mac {
-                return Err(ReplayError::Tampered { line: line_number, reason: "MAC does not verify".into() });
+                return Err(ReplayError::Tampered {
+                    line: line_number,
+                    reason: "MAC does not verify".into(),
+                });
             }
             if boots < store.boots {
-                return Err(ReplayError::Tampered { line: line_number, reason: "boots goes backwards".into() });
+                return Err(ReplayError::Tampered {
+                    line: line_number,
+                    reason: "boots goes backwards".into(),
+                });
             }
             store.boots = boots;
             store.head = mac;
@@ -173,7 +231,10 @@ impl CounterStore {
 
     /// Increment and persist before the session starts. If this fails, the guard must not serve.
     pub fn bump(&mut self) -> Result<u32, ReplayError> {
-        let next = self.boots.checked_add(1).ok_or(ReplayError::Rollback { stored: self.boots, anchor: u32::MAX })?;
+        let next = self.boots.checked_add(1).ok_or(ReplayError::Rollback {
+            stored: self.boots,
+            anchor: u32::MAX,
+        })?;
         let mac = self.mac(next, &self.head)?;
         let mut file = OpenOptions::new()
             .create(true)
@@ -181,8 +242,10 @@ impl CounterStore {
             .open(&self.path)
             .map_err(|error| ReplayError::Io(error.to_string()))?;
         let line = format!("{next} {} {}\n", encode_hex(&self.head), encode_hex(&mac));
-        file.write_all(line.as_bytes()).map_err(|error| ReplayError::Io(error.to_string()))?;
-        file.sync_all().map_err(|error| ReplayError::Io(error.to_string()))?;
+        file.write_all(line.as_bytes())
+            .map_err(|error| ReplayError::Io(error.to_string()))?;
+        file.sync_all()
+            .map_err(|error| ReplayError::Io(error.to_string()))?;
         self.boots = next;
         self.head = mac;
         self.records += 1;
@@ -193,7 +256,10 @@ impl CounterStore {
     /// supervisor has seen a higher `boots`, this file has been replaced.
     pub fn verify_against(&self, anchor: u32) -> Result<(), ReplayError> {
         if self.boots < anchor {
-            return Err(ReplayError::Rollback { stored: self.boots, anchor });
+            return Err(ReplayError::Rollback {
+                stored: self.boots,
+                anchor,
+            });
         }
         Ok(())
     }
@@ -203,7 +269,8 @@ impl CounterStore {
     }
 
     fn mac(&self, boots: u32, previous: &[u8; 32]) -> Result<[u8; 32], ReplayError> {
-        let mut mac = Hmac::<Sha256>::new_from_slice(&self.key).map_err(|error| ReplayError::Io(error.to_string()))?;
+        let mut mac = Hmac::<Sha256>::new_from_slice(&self.key)
+            .map_err(|error| ReplayError::Io(error.to_string()))?;
         mac.update(b"REDOUBT/1 counter");
         mac.update(&boots.to_be_bytes());
         mac.update(previous);

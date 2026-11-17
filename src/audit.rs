@@ -28,8 +28,12 @@ pub enum AuditError {
 impl std::fmt::Display for AuditError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AuditError::ChainBroken { index } => write!(f, "audit record {index} does not match the chain"),
-            AuditError::CheckpointMismatch { index } => write!(f, "audit checkpoint at record {index} does not verify"),
+            AuditError::ChainBroken { index } => {
+                write!(f, "audit record {index} does not match the chain")
+            }
+            AuditError::CheckpointMismatch { index } => {
+                write!(f, "audit checkpoint at record {index} does not verify")
+            }
             AuditError::Empty => write!(f, "the audit log is empty"),
             AuditError::Key => write!(f, "the audit key is unusable"),
         }
@@ -52,7 +56,12 @@ pub struct AuditLog {
 
 impl AuditLog {
     pub fn new(key: [u8; 32]) -> Self {
-        Self { key, records: Vec::new(), checkpoints: Vec::new(), checkpoint_every: 8 }
+        Self {
+            key,
+            records: Vec::new(),
+            checkpoints: Vec::new(),
+            checkpoint_every: 8,
+        }
     }
 
     pub fn with_checkpoint_every(mut self, every: usize) -> Self {
@@ -69,7 +78,10 @@ impl AuditLog {
         hasher.update(text.as_bytes());
         let mut hash = [0u8; 32];
         hash.copy_from_slice(&hasher.finalize());
-        self.records.push(Record { text: text.to_string(), hash });
+        self.records.push(Record {
+            text: text.to_string(),
+            hash,
+        });
         let index = self.records.len() - 1;
         if (index + 1) % self.checkpoint_every == 0 {
             let signature = self.sign(index)?;
@@ -104,7 +116,10 @@ impl AuditLog {
     }
 
     pub fn head(&self) -> [u8; 32] {
-        self.records.last().map(|record| record.hash).unwrap_or([0u8; 32])
+        self.records
+            .last()
+            .map(|record| record.hash)
+            .unwrap_or([0u8; 32])
     }
 
     pub fn records(&self) -> usize {

@@ -115,7 +115,12 @@ pub struct Guard {
 }
 
 impl Guard {
-    pub fn new(policy: Policy, audit_key: [u8; 32], keys: RoleKeys, heartbeat_timeout_ms: u64) -> Self {
+    pub fn new(
+        policy: Policy,
+        audit_key: [u8; 32],
+        keys: RoleKeys,
+        heartbeat_timeout_ms: u64,
+    ) -> Self {
         Self {
             policy,
             audit: AuditLog::new(audit_key),
@@ -170,7 +175,10 @@ impl Guard {
             None => false,
         };
         if alive {
-            return Decision::Allow { batch: 0, applied: 0 };
+            return Decision::Allow {
+                batch: 0,
+                applied: 0,
+            };
         }
         let affected = self.drive_all_safe();
         let _ = self.record(format!("dead-man: {affected} outputs driven safe"));
@@ -206,12 +214,19 @@ impl Guard {
         let opcode = match Opcode::from_function(frame.header.fc) {
             Ok(opcode) => opcode,
             Err(_) => {
-                let _ = self.record(format!("refused: function {} is not one we speak", frame.header.fc));
+                let _ = self.record(format!(
+                    "refused: function {} is not one we speak",
+                    frame.header.fc
+                ));
                 return Decision::Deny("unknown function code");
             }
         };
         let writes = opcode.writes();
-        let value = if writes { read_u16(frame.payload(), 0) } else { None };
+        let value = if writes {
+            read_u16(frame.payload(), 0)
+        } else {
+            None
+        };
         let request = Request {
             fc: frame.header.fc,
             unit: frame.header.unit,
@@ -230,7 +245,9 @@ impl Guard {
             }
             Verdict::Safe(why) => {
                 let affected = self.drive_safe(request.unit, request.addr, request.qty);
-                let _ = self.record(format!("refused-safe: {affected} outputs driven safe — {why}"));
+                let _ = self.record(format!(
+                    "refused-safe: {affected} outputs driven safe — {why}"
+                ));
                 Decision::Safe(why)
             }
             Verdict::Allow { dual } => {
@@ -253,7 +270,10 @@ impl Guard {
                         "read: fc={} unit={} addr={} qty={}",
                         request.fc, request.unit, request.addr, request.qty
                     ));
-                    return Decision::Allow { batch: 0, applied: 0 };
+                    return Decision::Allow {
+                        batch: 0,
+                        applied: 0,
+                    };
                 }
                 // Gate 6 before gate 7: if the decision cannot be recorded, it does not happen.
                 if self
@@ -268,7 +288,9 @@ impl Guard {
                     ))
                     .is_err()
                 {
-                    return Decision::Deny("the audit log is unavailable, so the write was refused");
+                    return Decision::Deny(
+                        "the audit log is unavailable, so the write was refused",
+                    );
                 }
                 let (batch, applied) = self.apply(&frame, opcode);
                 let _ = self.record(format!("applied: batch {batch} touched {applied} outputs"));
@@ -289,7 +311,9 @@ impl Guard {
             self.plc.set(unit, addr, value);
         }
         if self
-            .record(format!("revoked: batch {batch} replaced {written} outputs, restored {restored}"))
+            .record(format!(
+                "revoked: batch {batch} replaced {written} outputs, restored {restored}"
+            ))
             .is_err()
         {
             return Err("the audit log is unavailable; the revocation was not recorded");
@@ -316,7 +340,11 @@ impl Guard {
         }
         let id = self.next_batch;
         self.next_batch = self.next_batch.saturating_add(1);
-        self.batches.push(Batch { id, previous, current });
+        self.batches.push(Batch {
+            id,
+            previous,
+            current,
+        });
         (id, qty)
     }
 
@@ -339,12 +367,20 @@ impl Guard {
         let count = previous.len();
         let id = self.next_batch;
         self.next_batch = self.next_batch.saturating_add(1);
-        self.batches.push(Batch { id, previous, current });
+        self.batches.push(Batch {
+            id,
+            previous,
+            current,
+        });
         count
     }
 
     fn drive_all_safe(&mut self) -> usize {
-        let targets: Vec<(u8, u16, u16)> = self.safe.iter().map(|((unit, addr), value)| (*unit, *addr, *value)).collect();
+        let targets: Vec<(u8, u16, u16)> = self
+            .safe
+            .iter()
+            .map(|((unit, addr), value)| (*unit, *addr, *value))
+            .collect();
         let mut count = 0;
         for (unit, addr, value) in targets {
             self.plc.set(unit, addr, value);

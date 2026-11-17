@@ -23,16 +23,28 @@ pub fn connect(a: &KeyPair, b: &KeyPair) -> (Session, Session) {
     let mut initiator = Handshake::initiator(a, b.public_bytes(), prologue);
     let mut responder = Handshake::responder(b, a.public_bytes(), prologue);
     let message_one = initiator.write_message_1().expect("message one");
-    responder.read_message_1(&message_one).expect("responder reads one");
+    responder
+        .read_message_1(&message_one)
+        .expect("responder reads one");
     let message_two = responder.write_message_2().expect("message two");
-    initiator.read_message_2(&message_two).expect("initiator reads two");
+    initiator
+        .read_message_2(&message_two)
+        .expect("initiator reads two");
     let client = initiator.finish(0x1234_5678).expect("client session");
     let server = responder.finish(0x1234_5678).expect("server session");
     (client, server)
 }
 
 pub fn header(seq: u64, fc: u8, addr: u16, qty: u16, flags: u8) -> FrameHeader {
-    FrameHeader { flags, unit: 1, fc, session_id: 0x1234_5678, seq, addr, qty }
+    FrameHeader {
+        flags,
+        unit: 1,
+        fc,
+        session_id: 0x1234_5678,
+        seq,
+        addr,
+        qty,
+    }
 }
 
 pub fn seal(frame: &Frame, session: &mut Session) -> ([u8; MAX_FRAME], usize) {

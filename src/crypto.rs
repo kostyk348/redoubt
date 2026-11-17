@@ -61,10 +61,16 @@ impl std::fmt::Display for CryptoError {
         match self {
             CryptoError::Random => write!(f, "the system random source refused to work"),
             CryptoError::AuthenticationFailed => write!(f, "authentication failed"),
-            CryptoError::BadLength { expected, got } => write!(f, "expected {expected} bytes, got {got}"),
+            CryptoError::BadLength { expected, got } => {
+                write!(f, "expected {expected} bytes, got {got}")
+            }
             CryptoError::OutOfOrder(what) => write!(f, "handshake out of order: {what}"),
-            CryptoError::NonceExhausted => write!(f, "nonce space exhausted; the session must be re-keyed"),
-            CryptoError::TooLarge { limit, got } => write!(f, "{got} bytes do not fit the {limit}-byte budget"),
+            CryptoError::NonceExhausted => {
+                write!(f, "nonce space exhausted; the session must be re-keyed")
+            }
+            CryptoError::TooLarge { limit, got } => {
+                write!(f, "{got} bytes do not fit the {limit}-byte budget")
+            }
         }
     }
 }
@@ -172,7 +178,9 @@ impl Handshake {
     /// Initiator: `e, es, ss` and the first key-confirmation tag.
     pub fn write_message_1(&mut self) -> Result<[u8; MESSAGE], CryptoError> {
         if !self.initiator || self.step != Step::Start {
-            return Err(CryptoError::OutOfOrder("message one is written once, by the initiator"));
+            return Err(CryptoError::OutOfOrder(
+                "message one is written once, by the initiator",
+            ));
         }
         let ephemeral = random_secret()?;
         let mut message = [0u8; MESSAGE];
@@ -194,7 +202,9 @@ impl Handshake {
     /// initiator does not hold the static key its public key claims.
     pub fn read_message_1(&mut self, message: &[u8]) -> Result<(), CryptoError> {
         if self.initiator || self.step != Step::Start {
-            return Err(CryptoError::OutOfOrder("message one is read once, by the responder"));
+            return Err(CryptoError::OutOfOrder(
+                "message one is read once, by the responder",
+            ));
         }
         let message = expect_message(message)?;
         let mut peer_public = [0u8; KEY];
@@ -212,9 +222,13 @@ impl Handshake {
     /// Responder: `e, ee, se` and the second key-confirmation tag.
     pub fn write_message_2(&mut self) -> Result<[u8; MESSAGE], CryptoError> {
         if self.initiator || self.step != Step::ReadOne {
-            return Err(CryptoError::OutOfOrder("message two is written by the responder after message one"));
+            return Err(CryptoError::OutOfOrder(
+                "message two is written by the responder after message one",
+            ));
         }
-        let peer = self.peer_ephemeral.ok_or(CryptoError::OutOfOrder("no peer ephemeral"))?;
+        let peer = self
+            .peer_ephemeral
+            .ok_or(CryptoError::OutOfOrder("no peer ephemeral"))?;
         let ephemeral = random_secret()?;
         let mut message = [0u8; MESSAGE];
         let public = PublicKey::from(&ephemeral).to_bytes();
@@ -234,14 +248,19 @@ impl Handshake {
     /// Initiator: read message two.
     pub fn read_message_2(&mut self, message: &[u8]) -> Result<(), CryptoError> {
         if !self.initiator || self.step != Step::SentOne {
-            return Err(CryptoError::OutOfOrder("message two is read by the initiator after message one"));
+            return Err(CryptoError::OutOfOrder(
+                "message two is read by the initiator after message one",
+            ));
         }
         let message = expect_message(message)?;
         let mut peer_public = [0u8; KEY];
         peer_public.copy_from_slice(&message[..KEY]);
         let peer = PublicKey::from(peer_public);
         mix_hash(&mut self.hash, &peer_public);
-        let ephemeral = self.ephemeral.take().ok_or(CryptoError::OutOfOrder("no local ephemeral"))?;
+        let ephemeral = self
+            .ephemeral
+            .take()
+            .ok_or(CryptoError::OutOfOrder("no local ephemeral"))?;
         self.mix_key(&ephemeral.diffie_hellman(&peer).to_bytes());
         self.mix_key(&self.local.diffie_hellman(&peer).to_bytes());
         self.decrypt_and_hash(&message[KEY..])?;
@@ -258,14 +277,19 @@ impl Handshake {
         }
         let mut okm = [0u8; 64];
         let hkdf = Hkdf::<Sha256>::new(Some(&self.chaining_key), &[]);
-        hkdf.expand(&[], &mut okm).map_err(|_| CryptoError::Random)?;
+        hkdf.expand(&[], &mut okm)
+            .map_err(|_| CryptoError::Random)?;
         let mut first = [0u8; 32];
         let mut second = [0u8; 32];
         first.copy_from_slice(&okm[..32]);
         second.copy_from_slice(&okm[32..]);
         okm.zeroize();
         self.chaining_key.zeroize();
-        let (send, recv) = if self.initiator { (first, second) } else { (second, first) };
+        let (send, recv) = if self.initiator {
+            (first, second)
+        } else {
+            (second, first)
+        };
         Session::new(send, recv, session_id)
     }
 
@@ -283,7 +307,9 @@ impl Handshake {
     }
 
     fn encrypt_and_hash(&mut self, plaintext: &mut [u8]) -> Result<[u8; TAG], CryptoError> {
-        let key = self.cipher_key.ok_or(CryptoError::OutOfOrder("no key mixed yet"))?;
+        let key = self
+            .cipher_key
+            .ok_or(CryptoError::OutOfOrder("no key mixed yet"))?;
         let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| CryptoError::Random)?;
         let nonce = noise_nonce(self.nonce);
         let tag = cipher
@@ -304,16 +330,26 @@ impl Handshake {
     }
 
     fn decrypt_and_hash(&mut self, tag: &[u8]) -> Result<(), CryptoError> {
-        let key = self.cipher_key.ok_or(CryptoError::OutOfOrder("no key mixed yet"))?;
+        let key = self
+            .cipher_key
+            .ok_or(CryptoError::OutOfOrder("no key mixed yet"))?;
         if tag.len() != TAG {
-            return Err(CryptoError::BadLength { expected: TAG, got: tag.len() });
+            return Err(CryptoError::BadLength {
+                expected: TAG,
+                got: tag.len(),
+            });
         }
         let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| CryptoError::Random)?;
         let nonce = noise_nonce(self.nonce);
         let mut tag_bytes = [0u8; TAG];
         tag_bytes.copy_from_slice(tag);
         cipher
-            .decrypt_in_place_detached(Nonce::from_slice(&nonce), &self.hash, &mut [], Tag::from_slice(&tag_bytes))
+            .decrypt_in_place_detached(
+                Nonce::from_slice(&nonce),
+                &self.hash,
+                &mut [],
+                Tag::from_slice(&tag_bytes),
+            )
             .map_err(|_| CryptoError::AuthenticationFailed)?;
         self.nonce = self.nonce.saturating_add(1);
         mix_hash(&mut self.hash, &tag_bytes);
@@ -347,9 +383,17 @@ impl Session {
 
     /// Encrypt in place and write the tag after the payload. `buffer` holds the plaintext on entry
     /// and the ciphertext plus tag on exit; the return value is the total length.
-    pub fn seal(&mut self, header: &[u8], buffer: &mut [u8], plaintext_len: usize) -> Result<usize, CryptoError> {
+    pub fn seal(
+        &mut self,
+        header: &[u8],
+        buffer: &mut [u8],
+        plaintext_len: usize,
+    ) -> Result<usize, CryptoError> {
         if plaintext_len + TAG > buffer.len() {
-            return Err(CryptoError::TooLarge { limit: buffer.len(), got: plaintext_len + TAG });
+            return Err(CryptoError::TooLarge {
+                limit: buffer.len(),
+                got: plaintext_len + TAG,
+            });
         }
         if self.send_nonce == u64::MAX {
             return Err(CryptoError::NonceExhausted);
@@ -357,7 +401,11 @@ impl Session {
         let nonce = transport_nonce(self.session_id, self.send_nonce);
         let tag = self
             .send
-            .encrypt_in_place_detached(Nonce::from_slice(&nonce), header, &mut buffer[..plaintext_len])
+            .encrypt_in_place_detached(
+                Nonce::from_slice(&nonce),
+                header,
+                &mut buffer[..plaintext_len],
+            )
             .map_err(|_| CryptoError::AuthenticationFailed)?;
         buffer[plaintext_len..plaintext_len + TAG].copy_from_slice(&tag);
         self.send_nonce += 1;
@@ -365,9 +413,17 @@ impl Session {
     }
 
     /// Decrypt in place: `buffer` holds ciphertext plus tag, and on success holds the plaintext.
-    pub fn open(&mut self, header: &[u8], buffer: &mut [u8], ciphertext_len: usize) -> Result<usize, CryptoError> {
+    pub fn open(
+        &mut self,
+        header: &[u8],
+        buffer: &mut [u8],
+        ciphertext_len: usize,
+    ) -> Result<usize, CryptoError> {
         if ciphertext_len < TAG || ciphertext_len > buffer.len() {
-            return Err(CryptoError::BadLength { expected: TAG, got: ciphertext_len });
+            return Err(CryptoError::BadLength {
+                expected: TAG,
+                got: ciphertext_len,
+            });
         }
         if self.recv_nonce == u64::MAX {
             return Err(CryptoError::NonceExhausted);
@@ -377,7 +433,12 @@ impl Session {
         let mut tag = [0u8; TAG];
         tag.copy_from_slice(&buffer[plaintext_len..ciphertext_len]);
         self.recv
-            .decrypt_in_place_detached(Nonce::from_slice(&nonce), header, &mut buffer[..plaintext_len], Tag::from_slice(&tag))
+            .decrypt_in_place_detached(
+                Nonce::from_slice(&nonce),
+                header,
+                &mut buffer[..plaintext_len],
+                Tag::from_slice(&tag),
+            )
             .map_err(|_| CryptoError::AuthenticationFailed)?;
         self.recv_nonce += 1;
         Ok(plaintext_len)
@@ -386,7 +447,10 @@ impl Session {
 
 fn expect_message(message: &[u8]) -> Result<&[u8], CryptoError> {
     if message.len() != MESSAGE {
-        return Err(CryptoError::BadLength { expected: MESSAGE, got: message.len() });
+        return Err(CryptoError::BadLength {
+            expected: MESSAGE,
+            got: message.len(),
+        });
     }
     Ok(message)
 }

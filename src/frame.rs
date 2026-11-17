@@ -46,11 +46,18 @@ impl std::fmt::Display for FrameError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             FrameError::TooShort { got } => write!(f, "{got} bytes is shorter than a header"),
-            FrameError::TooLong { got } => write!(f, "{got} bytes exceeds the {MAX_FRAME}-byte frame budget"),
+            FrameError::TooLong { got } => {
+                write!(f, "{got} bytes exceeds the {MAX_FRAME}-byte frame budget")
+            }
             FrameError::UnknownVersion(v) => write!(f, "version {v} is not {VERSION}"),
-            FrameError::UnknownFunction(fc) => write!(f, "function {fc} is not one this guard speaks"),
+            FrameError::UnknownFunction(fc) => {
+                write!(f, "function {fc} is not one this guard speaks")
+            }
             FrameError::PayloadMismatch { fc, qty, payload } => {
-                write!(f, "function {fc} with quantity {qty} cannot carry {payload} bytes")
+                write!(
+                    f,
+                    "function {fc} with quantity {qty} cannot carry {payload} bytes"
+                )
             }
             FrameError::Crypto(error) => write!(f, "{error}"),
         }
@@ -164,11 +171,19 @@ impl Frame {
         let opcode = Opcode::from_function(header.fc)?;
         let expected = expected_payload(opcode, header.qty, header.wants_dual())?;
         if payload.len() != expected {
-            return Err(FrameError::PayloadMismatch { fc: header.fc, qty: header.qty, payload: payload.len() });
+            return Err(FrameError::PayloadMismatch {
+                fc: header.fc,
+                qty: header.qty,
+                payload: payload.len(),
+            });
         }
         let mut buffer = [0u8; MAX_PAYLOAD];
         buffer[..payload.len()].copy_from_slice(payload);
-        Ok(Self { header, payload: buffer, payload_len: payload.len() })
+        Ok(Self {
+            header,
+            payload: buffer,
+            payload_len: payload.len(),
+        })
     }
 
     pub fn payload(&self) -> &[u8] {
@@ -176,7 +191,11 @@ impl Frame {
     }
 
     /// Encrypt into `out`, returning the total length. Nothing is allocated.
-    pub fn seal(&self, session: &mut Session, out: &mut [u8; MAX_FRAME]) -> Result<usize, FrameError> {
+    pub fn seal(
+        &self,
+        session: &mut Session,
+        out: &mut [u8; MAX_FRAME],
+    ) -> Result<usize, FrameError> {
         let header = self.header.encode();
         out[..HEADER].copy_from_slice(&header);
         out[HEADER..HEADER + self.payload_len].copy_from_slice(self.payload());
@@ -187,7 +206,11 @@ impl Frame {
 
     /// Verify and decrypt in place. The buffer is consumed: on success it holds the plaintext, on
     /// failure the caller must discard it entirely.
-    pub fn open(buffer: &mut [u8], length: usize, session: &mut Session) -> Result<Self, FrameError> {
+    pub fn open(
+        buffer: &mut [u8],
+        length: usize,
+        session: &mut Session,
+    ) -> Result<Self, FrameError> {
         if length > MAX_FRAME {
             return Err(FrameError::TooLong { got: length });
         }
@@ -198,14 +221,23 @@ impl Frame {
         header_bytes.copy_from_slice(&buffer[..HEADER]);
         let header = FrameHeader::decode(&header_bytes)?;
         let opcode = Opcode::from_function(header.fc)?;
-        let plaintext = session.open(&header_bytes, &mut buffer[HEADER..length], length - HEADER)?;
+        let plaintext =
+            session.open(&header_bytes, &mut buffer[HEADER..length], length - HEADER)?;
         let expected = expected_payload(opcode, header.qty, header.wants_dual())?;
         if plaintext != expected {
-            return Err(FrameError::PayloadMismatch { fc: header.fc, qty: header.qty, payload: plaintext });
+            return Err(FrameError::PayloadMismatch {
+                fc: header.fc,
+                qty: header.qty,
+                payload: plaintext,
+            });
         }
         let mut payload = [0u8; MAX_PAYLOAD];
         payload[..plaintext].copy_from_slice(&buffer[HEADER..HEADER + plaintext]);
-        Ok(Self { header, payload, payload_len: plaintext })
+        Ok(Self {
+            header,
+            payload,
+            payload_len: plaintext,
+        })
     }
 }
 
@@ -219,18 +251,30 @@ pub fn expected_payload(opcode: Opcode, qty: u16, dual: bool) -> Result<usize, F
     match opcode {
         Opcode::ReadRegisters | Opcode::ReadBits => {
             if qty == 0 || qty > 2000 {
-                return Err(FrameError::PayloadMismatch { fc: 0, qty, payload: 0 });
+                return Err(FrameError::PayloadMismatch {
+                    fc: 0,
+                    qty,
+                    payload: 0,
+                });
             }
             Ok(0)
         }
         Opcode::WriteSingle => Ok(if dual { 2 + 64 } else { 2 }),
         Opcode::WriteMultiple => {
             if dual {
-                return Err(FrameError::PayloadMismatch { fc: 16, qty, payload: 66 });
+                return Err(FrameError::PayloadMismatch {
+                    fc: 16,
+                    qty,
+                    payload: 66,
+                });
             }
             let bytes = usize::from(qty) * 2;
             if bytes == 0 || bytes > MAX_PAYLOAD {
-                return Err(FrameError::PayloadMismatch { fc: 16, qty, payload: bytes });
+                return Err(FrameError::PayloadMismatch {
+                    fc: 16,
+                    qty,
+                    payload: bytes,
+                });
             }
             Ok(bytes)
         }

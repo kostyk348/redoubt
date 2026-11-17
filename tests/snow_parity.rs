@@ -47,31 +47,46 @@ fn a_reference_noise_peer_completes_a_handshake_with_us() {
     // Message one: ours → the reference.
     let message_one = ours.write_message_1().expect("our message one");
     let mut payload = [0u8; 64];
-    let read = reference.read_message(&message_one, &mut payload).expect("the reference accepts our message one");
+    let read = reference
+        .read_message(&message_one, &mut payload)
+        .expect("the reference accepts our message one");
     assert_eq!(read, 0, "no handshake payload");
 
     // Message two: the reference → ours.
     let mut message_two = [0u8; 96];
-    let length = reference.write_message(&[], &mut message_two).expect("reference message two");
-    ours.read_message_2(&message_two[..length]).expect("we accept the reference's message two");
+    let length = reference
+        .write_message(&[], &mut message_two)
+        .expect("reference message two");
+    ours.read_message_2(&message_two[..length])
+        .expect("we accept the reference's message two");
 
     // Sessions on both sides. Session id zero keeps our transport nonce byte-for-byte the Noise one.
     let mut our_session = ours.finish(0).expect("our session");
-    let mut reference = reference.into_transport_mode().expect("reference transport");
+    let mut reference = reference
+        .into_transport_mode()
+        .expect("reference transport");
 
     // The reference sends, we receive.
     let mut frame = [0u8; 64];
-    let written = reference.write_message(b"open the valve", &mut frame).expect("reference writes");
-    let opened = our_session.open(&[], &mut frame, written).expect("we decrypt the reference's message");
+    let written = reference
+        .write_message(b"open the valve", &mut frame)
+        .expect("reference writes");
+    let opened = our_session
+        .open(&[], &mut frame, written)
+        .expect("we decrypt the reference's message");
     assert_eq!(&frame[..opened], b"open the valve");
 
     // We send, the reference receives.
     let mut ours_out = [0u8; 64];
     let plaintext = b"valve opened";
     ours_out[..plaintext.len()].copy_from_slice(plaintext);
-    let sealed = our_session.seal(&[], &mut ours_out, plaintext.len()).expect("we seal");
+    let sealed = our_session
+        .seal(&[], &mut ours_out, plaintext.len())
+        .expect("we seal");
     let mut received = [0u8; 64];
-    let read = reference.read_message(&ours_out[..sealed], &mut received).expect("the reference decrypts our message");
+    let read = reference
+        .read_message(&ours_out[..sealed], &mut received)
+        .expect("the reference decrypts our message");
     assert_eq!(&received[..read], plaintext);
 }
 
@@ -89,12 +104,19 @@ fn the_reference_refuses_a_modified_message_of_ours() {
         .build_responder()
         .expect("responder");
 
-    let mut ours = Handshake::initiator(&station, KeyPair::from_bytes(device_secret).public_bytes(), &[]);
+    let mut ours = Handshake::initiator(
+        &station,
+        KeyPair::from_bytes(device_secret).public_bytes(),
+        &[],
+    );
     let mut message_one = ours.write_message_1().expect("message one");
     let last = message_one.len() - 1;
     message_one[last] ^= 0x01;
     let mut payload = [0u8; 64];
-    assert!(reference.read_message(&message_one, &mut payload).is_err(), "a flipped bit must not verify");
+    assert!(
+        reference.read_message(&message_one, &mut payload).is_err(),
+        "a flipped bit must not verify"
+    );
 }
 
 #[test]
@@ -112,10 +134,14 @@ fn the_reference_keys_differ_when_the_static_key_is_wrong() {
         .build_responder()
         .expect("responder");
 
-    let mut ours = Handshake::initiator(&station, KeyPair::from_bytes(seed(21)).public_bytes(), &[]);
+    let mut ours =
+        Handshake::initiator(&station, KeyPair::from_bytes(seed(21)).public_bytes(), &[]);
     let message_one = ours.write_message_1().expect("message one");
     let mut payload = [0u8; 64];
-    assert!(reference.read_message(&message_one, &mut payload).is_err(), "wrong static key must fail");
+    assert!(
+        reference.read_message(&message_one, &mut payload).is_err(),
+        "wrong static key must fail"
+    );
 }
 
 /// Keep the unused import honest: `Session` is used in the type annotation above.

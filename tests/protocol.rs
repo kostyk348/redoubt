@@ -30,7 +30,10 @@ fn a_modified_handshake_message_is_refused() {
     let mut responder = Handshake::responder(&b, a.public_bytes(), prologue);
     let mut message_one = initiator.write_message_1().expect("message one");
     message_one[MESSAGE - 1] ^= 0x01;
-    assert!(responder.read_message_1(&message_one).is_err(), "a flipped tag bit must not verify");
+    assert!(
+        responder.read_message_1(&message_one).is_err(),
+        "a flipped tag bit must not verify"
+    );
 }
 
 #[test]
@@ -59,12 +62,18 @@ fn a_flipped_bit_in_the_header_or_the_payload_is_refused() {
     // Payload byte.
     let (mut buffer, length) = seal(&frame, &mut client);
     buffer[26] ^= 0x01;
-    assert!(Frame::open(&mut buffer, length, &mut server).is_err(), "payload bit flip");
+    assert!(
+        Frame::open(&mut buffer, length, &mut server).is_err(),
+        "payload bit flip"
+    );
 
     // Header byte: the function code is part of the associated data.
     let (mut buffer, length) = seal(&frame, &mut client);
     buffer[3] = 16;
-    assert!(Frame::open(&mut buffer, length, &mut server).is_err(), "header bit flip");
+    assert!(
+        Frame::open(&mut buffer, length, &mut server).is_err(),
+        "header bit flip"
+    );
 }
 
 #[test]
@@ -74,10 +83,19 @@ fn truncated_and_oversized_frames_are_refused_without_panicking() {
     let frame = Frame::new(header(1, 5, 10, 1, 0), &1u16.to_be_bytes()).expect("frame");
     let (mut buffer, length) = seal(&frame, &mut client);
 
-    assert!(Frame::open(&mut buffer, 10, &mut server).is_err(), "shorter than a header");
+    assert!(
+        Frame::open(&mut buffer, 10, &mut server).is_err(),
+        "shorter than a header"
+    );
     let mut huge = [0u8; MAX_FRAME + 1];
-    assert!(Frame::open(&mut huge, MAX_FRAME + 1, &mut server).is_err(), "over the budget");
-    assert!(Frame::open(&mut buffer, length - 1, &mut server).is_err(), "one byte short");
+    assert!(
+        Frame::open(&mut huge, MAX_FRAME + 1, &mut server).is_err(),
+        "over the budget"
+    );
+    assert!(
+        Frame::open(&mut buffer, length - 1, &mut server).is_err(),
+        "one byte short"
+    );
 }
 
 #[test]
@@ -94,19 +112,28 @@ fn the_replay_window_accepts_fresh_out_of_order_and_refuses_the_rest() {
     }
     assert_eq!(window.check_and_update(3), Err(ReplayError::Duplicate(3)));
     assert!(window.check_and_update(7).is_ok(), "a jump forward is fine");
-    assert!(window.check_and_update(6).is_ok(), "and the gap can be filled");
+    assert!(
+        window.check_and_update(6).is_ok(),
+        "and the gap can be filled"
+    );
     assert_eq!(window.check_and_update(0), Err(ReplayError::Zero));
     for _ in 0..100 {
         let _ = window.check_and_update(window.highest() + 1);
     }
-    assert!(matches!(window.check_and_update(2), Err(ReplayError::TooOld(_))));
+    assert!(matches!(
+        window.check_and_update(2),
+        Err(ReplayError::TooOld(_))
+    ));
 }
 
 #[test]
 fn after_a_restart_nothing_at_or_below_the_floor_is_fresh() {
     let mut window = ReplayWindow::from_highest(500);
     assert!(window.check_and_update(501).is_ok());
-    assert!(window.check_and_update(500).is_err(), "the floor itself must not be accepted");
+    assert!(
+        window.check_and_update(500).is_err(),
+        "the floor itself must not be accepted"
+    );
 }
 
 #[test]
@@ -129,7 +156,10 @@ fn the_counter_file_notices_edits_and_rollback() {
     assert_eq!(store.records(), 2);
 
     // A supervisor that has seen a higher boots value exposes a replaced file.
-    assert!(matches!(store.verify_against(5), Err(ReplayError::Rollback { .. })));
+    assert!(matches!(
+        store.verify_against(5),
+        Err(ReplayError::Rollback { .. })
+    ));
     assert!(store.verify_against(2).is_ok());
 
     // Editing a record breaks it.
@@ -139,13 +169,19 @@ fn the_counter_file_notices_edits_and_rollback() {
         *first = first.replace('1', "9");
     }
     std::fs::write(&path, lines.join("\n") + "\n").expect("write");
-    assert!(CounterStore::open(&path, key).is_err(), "an edited record must not load");
+    assert!(
+        CounterStore::open(&path, key).is_err(),
+        "an edited record must not load"
+    );
 
     // A wrong key is a different chain.
     let _ = std::fs::remove_file(&path);
     let mut store = CounterStore::open(&path, key).expect("open");
     store.bump().expect("bump");
-    assert!(CounterStore::open(&path, [8u8; 32]).is_err(), "the MAC key is part of the chain");
+    assert!(
+        CounterStore::open(&path, [8u8; 32]).is_err(),
+        "the MAC key is part of the chain"
+    );
     let _ = std::fs::remove_file(&path);
 }
 
@@ -157,16 +193,37 @@ fn deny_overrides_allow_whatever_the_order() {
          deny  fc 6 addr 40005\n",
     )
     .expect("policy");
-    let request = Request { fc: 6, unit: 1, addr: 40005, qty: 1, value: Some(10), role: Role::Operator };
+    let request = Request {
+        fc: 6,
+        unit: 1,
+        addr: 40005,
+        qty: 1,
+        value: Some(10),
+        role: Role::Operator,
+    };
     assert!(matches!(policy.evaluate(&request), Verdict::Deny(_)));
-    let allowed = Request { fc: 6, unit: 1, addr: 40001, qty: 1, value: Some(10), role: Role::Operator };
+    let allowed = Request {
+        fc: 6,
+        unit: 1,
+        addr: 40001,
+        qty: 1,
+        value: Some(10),
+        role: Role::Operator,
+    };
     assert_eq!(policy.evaluate(&allowed), Verdict::Allow { dual: false });
 }
 
 #[test]
 fn nothing_matches_means_nothing_is_allowed() {
     let policy = Policy::parse("allow fc 3 addr 0..499 role reader\n").expect("policy");
-    let request = Request { fc: 16, unit: 1, addr: 40001, qty: 1, value: Some(1), role: Role::Supervisor };
+    let request = Request {
+        fc: 16,
+        unit: 1,
+        addr: 40001,
+        qty: 1,
+        value: Some(1),
+        role: Role::Supervisor,
+    };
     assert!(matches!(policy.evaluate(&request), Verdict::Deny(_)));
 }
 
@@ -174,8 +231,22 @@ fn nothing_matches_means_nothing_is_allowed() {
 fn a_rule_covers_the_whole_span_or_nothing() {
     // A rule for ten registers must not authorise a write that runs past the tenth.
     let policy = Policy::parse("allow fc 16 addr 40001..40010 role operator\n").expect("policy");
-    let inside = Request { fc: 16, unit: 1, addr: 40001, qty: 10, value: None, role: Role::Operator };
-    let past = Request { fc: 16, unit: 1, addr: 40001, qty: 11, value: None, role: Role::Operator };
+    let inside = Request {
+        fc: 16,
+        unit: 1,
+        addr: 40001,
+        qty: 10,
+        value: None,
+        role: Role::Operator,
+    };
+    let past = Request {
+        fc: 16,
+        unit: 1,
+        addr: 40001,
+        qty: 11,
+        value: None,
+        role: Role::Operator,
+    };
     assert!(matches!(policy.evaluate(&inside), Verdict::Allow { .. }));
     assert!(matches!(policy.evaluate(&past), Verdict::Deny(_)));
 }
@@ -183,17 +254,43 @@ fn a_rule_covers_the_whole_span_or_nothing() {
 #[test]
 fn a_role_is_a_floor_not_an_equality() {
     let policy = Policy::parse("allow fc 6 addr 0..9 role operator\n").expect("policy");
-    let as_reader = Request { fc: 6, unit: 1, addr: 1, qty: 1, value: Some(1), role: Role::Reader };
-    let as_supervisor = Request { fc: 6, unit: 1, addr: 1, qty: 1, value: Some(1), role: Role::Supervisor };
+    let as_reader = Request {
+        fc: 6,
+        unit: 1,
+        addr: 1,
+        qty: 1,
+        value: Some(1),
+        role: Role::Reader,
+    };
+    let as_supervisor = Request {
+        fc: 6,
+        unit: 1,
+        addr: 1,
+        qty: 1,
+        value: Some(1),
+        role: Role::Supervisor,
+    };
     assert!(matches!(policy.evaluate(&as_reader), Verdict::Deny(_)));
-    assert!(matches!(policy.evaluate(&as_supervisor), Verdict::Allow { .. }));
+    assert!(matches!(
+        policy.evaluate(&as_supervisor),
+        Verdict::Allow { .. }
+    ));
 }
 
 #[test]
 fn the_policy_refuses_to_load_something_that_would_allow_everything() {
-    assert!(Policy::parse("allow addr 0..10\n").is_err(), "a rule without fc matches every function");
-    assert!(Policy::parse("allow fc 6 addr 10..1\n").is_err(), "a backwards range");
-    assert!(Policy::parse("").is_err(), "an empty policy allows nothing, which is a configuration error");
+    assert!(
+        Policy::parse("allow addr 0..10\n").is_err(),
+        "a rule without fc matches every function"
+    );
+    assert!(
+        Policy::parse("allow fc 6 addr 10..1\n").is_err(),
+        "a backwards range"
+    );
+    assert!(
+        Policy::parse("").is_err(),
+        "an empty policy allows nothing, which is a configuration error"
+    );
 }
 
 #[test]
@@ -205,7 +302,10 @@ fn the_audit_chain_notices_an_edited_record() {
     assert_eq!(log.verify().expect("verify"), 10);
 
     assert!(log.replace_for_test(4, "entry 4 (edited)"));
-    assert!(log.verify().is_err(), "an edited record breaks every hash after it");
+    assert!(
+        log.verify().is_err(),
+        "an edited record breaks every hash after it"
+    );
 }
 
 #[test]
@@ -219,5 +319,9 @@ fn truncation_is_caught_by_a_head_kept_elsewhere() {
     // The chain that remains is internally consistent — this is the honest limit of a log that
     // lives on the same disk as its attacker. What catches it is a head kept somewhere else.
     assert_eq!(log.verify().expect("the remainder still verifies"), 5);
-    assert_ne!(log.head(), head_before, "the head moved, and the supervisor's copy says so");
+    assert_ne!(
+        log.head(),
+        head_before,
+        "the head moved, and the supervisor's copy says so"
+    );
 }

@@ -101,10 +101,16 @@ impl Policy {
             if line.is_empty() {
                 continue;
             }
-            rules.push(parse_rule(line).map_err(|reason| PolicyError { line: index + 1, reason })?);
+            rules.push(parse_rule(line).map_err(|reason| PolicyError {
+                line: index + 1,
+                reason,
+            })?);
         }
         if rules.is_empty() {
-            return Err(PolicyError { line: 0, reason: "the policy has no rules, so nothing would ever be allowed".into() });
+            return Err(PolicyError {
+                line: 0,
+                reason: "the policy has no rules, so nothing would ever be allowed".into(),
+            });
         }
         Ok(Self { rules })
     }
@@ -147,7 +153,15 @@ fn parse_rule(line: &str) -> Result<Rule, String> {
         "safe" => Kind::Safe,
         other => return Err(format!("{other:?} is not allow, deny or safe")),
     };
-    let mut rule = Rule { kind, functions: Vec::new(), units: None, address: None, role: None, value: None, dual: false };
+    let mut rule = Rule {
+        kind,
+        functions: Vec::new(),
+        units: None,
+        address: None,
+        role: None,
+        value: None,
+        dual: false,
+    };
     let words: Vec<&str> = words.collect();
     let mut index = 0;
     while index < words.len() {
@@ -178,7 +192,10 @@ fn parse_rule(line: &str) -> Result<Rule, String> {
             "role" => {
                 index += 1;
                 let text = words.get(index).ok_or("role needs a name")?;
-                rule.role = Some(Role::parse(text).ok_or_else(|| format!("{text:?} is not reader, operator or supervisor"))?);
+                rule.role =
+                    Some(Role::parse(text).ok_or_else(|| {
+                        format!("{text:?} is not reader, operator or supervisor")
+                    })?);
                 index += 1;
             }
             "value" => {
@@ -201,17 +218,26 @@ fn parse_u8_set(words: &[&str]) -> Result<(Vec<u8>, usize), String> {
     let first = words.first().ok_or("expected a number or `in`")?;
     if *first == "in" {
         let set = words.get(1).ok_or("`in` needs a set like {3,4}")?;
-        let inner = set.strip_prefix('{').and_then(|s| s.strip_suffix('}')).ok_or("a set is written {3,4}")?;
+        let inner = set
+            .strip_prefix('{')
+            .and_then(|s| s.strip_suffix('}'))
+            .ok_or("a set is written {3,4}")?;
         let mut values = Vec::new();
         for item in inner.split(',') {
-            values.push(item.trim().parse::<u8>().map_err(|_| format!("{item:?} is not a number"))?);
+            values.push(
+                item.trim()
+                    .parse::<u8>()
+                    .map_err(|_| format!("{item:?} is not a number"))?,
+            );
         }
         if values.is_empty() {
             return Err("an empty set matches nothing".into());
         }
         Ok((values, 2))
     } else {
-        let value = first.parse::<u8>().map_err(|_| format!("{first:?} is not a number"))?;
+        let value = first
+            .parse::<u8>()
+            .map_err(|_| format!("{first:?} is not a number"))?;
         Ok((vec![value], 1))
     }
 }
@@ -219,15 +245,21 @@ fn parse_u8_set(words: &[&str]) -> Result<(Vec<u8>, usize), String> {
 fn parse_range(text: &str) -> Result<(u16, u16), String> {
     match text.split_once("..") {
         Some((low, high)) => {
-            let low: u16 = low.parse().map_err(|_| format!("{low:?} is not a number"))?;
-            let high: u16 = high.parse().map_err(|_| format!("{high:?} is not a number"))?;
+            let low: u16 = low
+                .parse()
+                .map_err(|_| format!("{low:?} is not a number"))?;
+            let high: u16 = high
+                .parse()
+                .map_err(|_| format!("{high:?} is not a number"))?;
             if low > high {
                 return Err(format!("range {low}..{high} is backwards"));
             }
             Ok((low, high))
         }
         None => {
-            let value: u16 = text.parse().map_err(|_| format!("{text:?} is not a number or a range"))?;
+            let value: u16 = text
+                .parse()
+                .map_err(|_| format!("{text:?} is not a number or a range"))?;
             Ok((value, value))
         }
     }
