@@ -39,11 +39,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: leanprover/lean-action@v1
-        with:
-          auto-config: false
-          build: false
-          use-github-cache: false
+      # lean/Redoubt.lean is a standalone file, not a Lake package, so
+      # leanprover/lean-action is not usable here: it refuses to configure
+      # without a lake-manifest.json. Elan reads lean-toolchain at the repo
+      # root and installs exactly the pinned Lean, which is all this check needs.
+      - name: install elan from lean-toolchain
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
       - name: check the proofs
         run: lean lean/Redoubt.lean
 
