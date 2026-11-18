@@ -71,14 +71,14 @@ impl fmt::Display for PolicyError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Kind {
+pub(crate) enum Kind {
     Allow,
     Deny,
     Safe,
 }
 
 #[derive(Debug, Clone)]
-struct Rule {
+pub(crate) struct Rule {
     kind: Kind,
     functions: Vec<u8>,
     units: Option<Vec<u8>>,
