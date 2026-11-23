@@ -2,10 +2,12 @@
 
 **English** · [Русский](README.ru.md)
 
+[![CI](https://github.com/kostyk348/redoubt/actions/workflows/ci.yml/badge.svg)](https://github.com/kostyk348/redoubt/actions/workflows/ci.yml)
 ![tests](https://img.shields.io/badge/tests-28-brightgreen)
 ![clippy](https://img.shields.io/badge/clippy-warnings%20are%20errors-brightgreen)
 ![lean](https://img.shields.io/badge/lean-20%20theorems-blueviolet)
 ![noise](https://img.shields.io/badge/noise-parity%20with%20snow-informational)
+[![rust](https://img.shields.io/badge/rust-1.80%2B-orange)](Cargo.toml)
 ![licence](https://img.shields.io/badge/licence-MIT-blue)
 
 A **redoubt** is a small fort you hold from the inside. This repository is a protocol and a library
