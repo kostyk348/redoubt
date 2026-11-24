@@ -12,6 +12,9 @@ cargo clippy --all-targets -- -D warnings
 echo "== tests =="
 cargo test --all-targets
 
+echo "== tests with the serial feature (COM adapter) =="
+cargo test --all-targets --features serial
+
 if command -v lean >/dev/null 2>&1; then
   echo "== lean =="
   lean lean/Redoubt.lean

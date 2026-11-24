@@ -22,8 +22,15 @@ jobs:
         run: cargo fmt --all -- --check
       - name: clippy (warnings are errors)
         run: cargo clippy --all-targets -- -D warnings
+      - name: udev for serialport (linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config
+      - name: clippy with the serial feature
+        run: cargo clippy --all-targets --features serial -- -D warnings
       - name: tests
         run: cargo test --all-targets
+      - name: tests with the serial feature
+        run: cargo test --all-targets --features serial
 
   kani:
     name: kani (proofs over the compiled code)
