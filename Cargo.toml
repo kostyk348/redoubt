@@ -30,5 +30,14 @@ panic = "abort"
 [dev-dependencies]
 snow = "0.9.6"
 
+[features]
+# Привязка к настоящему COM-порту (serialport crate). Дефолт — без зависимостей.
+serial = ["dep:serialport"]
+
+[dependencies.serialport]
+version = "4"
+optional = true
+default-features = false
+
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }

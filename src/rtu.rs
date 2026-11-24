@@ -395,6 +395,207 @@ impl Not for bool {
     }
 }
 
+/// Ответ слейва — не запрос мастера: у FC3/4 на проводе байт-каунт и данные,
+/// у FC5/6 — эхо запроса, у FC15/16 — эхо адреса и количества. Свои форма и разбор.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RespOp {
+    /// FC 1/2/3/4: сырые байты данных (биты — упакованные байты, регистры — BE-пары).
+    Read { unit: u8, fc: u8, data: Vec<u8> },
+    /// FC 5/6: устройство повторяет запрос (эхо) — так подтверждается запись.
+    WriteEcho {
+        unit: u8,
+        fc: u8,
+        addr: u16,
+        value: u16,
+    },
+    /// FC 15/16: устройство повторяет адрес и количество.
+    WriteAck { unit: u8, addr: u16, qty: u16 },
+    /// Отказ устройства: fc|0x80 и код исключения.
+    Exception { unit: u8, fc: u8, code: u8 },
+}
+
+impl RespOp {
+    pub fn unit(&self) -> u8 {
+        match self {
+            RespOp::Read { unit, .. }
+            | RespOp::WriteEcho { unit, .. }
+            | RespOp::WriteAck { unit, .. }
+            | RespOp::Exception { unit, .. } => *unit,
+        }
+    }
+}
+
+/// Полная длина ответа по fc: 5+count для 1–4, 8 для 5/6 и 15/16, 5 для исключений.
+fn expected_resp_len(fc: u8, adu: &[u8]) -> Result<usize, RtuError> {
+    if fc & 0x80 != 0 {
+        return Ok(5);
+    }
+    match fc {
+        1..=4 => {
+            if adu.len() < 3 {
+                return Err(RtuError::BadLength);
+            }
+            Ok(5 + usize::from(adu[2]))
+        }
+        5 | 6 | 15 | 16 => Ok(8),
+        _ => Err(RtuError::UnsupportedFc),
+    }
+}
+
+/// Разбор одного ответного ADU. Тот же контракт, что у [`parse`]: длина выводится
+/// из fc до CRC, лишние байты — чужой кадр, а не «второй ответ».
+pub fn parse_response(adu: &[u8]) -> Result<RespOp, RtuError> {
+    if adu.len() < 4 {
+        return Err(RtuError::TooShort);
+    }
+    if adu.len() > MAX_ADU {
+        return Err(RtuError::TooLong);
+    }
+    let fc = adu[1];
+    let expected = expected_resp_len(fc, adu)?;
+    if adu.len() > expected {
+        return Err(RtuError::TrailingBytes);
+    }
+    let split = adu.len() - 2;
+    let body = &adu[..split];
+    let want = u16::from_le_bytes([adu[split], adu[split + 1]]);
+    if crc16(body) != want {
+        return Err(RtuError::CrcMismatch);
+    }
+    if adu.len() < expected {
+        return Err(RtuError::BadLength);
+    }
+    let unit = body[0];
+    if unit == 0 {
+        return Err(RtuError::BroadcastUnit);
+    }
+    let data = &body[2..];
+
+    if fc & 0x80 != 0 {
+        return match data {
+            [code] => Ok(RespOp::Exception {
+                unit,
+                fc: fc & 0x7F,
+                code: *code,
+            }),
+            _ => Err(RtuError::BadLength),
+        };
+    }
+    match fc {
+        1..=4 => {
+            let count = usize::from(data[0]);
+            if count + 1 != data.len() || count > 250 {
+                return Err(RtuError::BadLength);
+            }
+            Ok(RespOp::Read {
+                unit,
+                fc,
+                data: data[1..].to_vec(),
+            })
+        }
+        5 | 6 => match data {
+            [a0, a1, v0, v1] => Ok(RespOp::WriteEcho {
+                unit,
+                fc,
+                addr: u16::from_be_bytes([*a0, *a1]),
+                value: u16::from_be_bytes([*v0, *v1]),
+            }),
+            _ => Err(RtuError::BadLength),
+        },
+        _ => match data {
+            [a0, a1, q0, q1] => Ok(RespOp::WriteAck {
+                unit,
+                addr: u16::from_be_bytes([*a0, *a1]),
+                qty: u16::from_be_bytes([*q0, *q1]),
+            }),
+            _ => Err(RtuError::BadLength),
+        },
+    }
+}
+
+#[cfg(test)]
+mod response_tests {
+    use super::*;
+
+    /// Ответ слейва на FC3: unit, fc, count, значения, crc.
+    fn fc3_response(unit: u8, values: &[u16]) -> Vec<u8> {
+        let mut body = vec![unit, 3, (values.len() * 2) as u8];
+        for v in values {
+            body.push((v >> 8) as u8);
+            body.push((v & 0xFF) as u8);
+        }
+        let crc = crc16(&body);
+        body.push((crc & 0xFF) as u8);
+        body.push((crc >> 8) as u8);
+        body
+    }
+
+    #[test]
+    fn a_register_response_decodes_with_its_values() {
+        let resp = fc3_response(1, &[0x1234, 0x0055]);
+        assert_eq!(
+            parse_response(&resp),
+            Ok(RespOp::Read {
+                unit: 1,
+                fc: 3,
+                data: vec![0x12, 0x34, 0x00, 0x55]
+            })
+        );
+    }
+
+    #[test]
+    fn an_echo_response_decodes_and_a_truncated_one_is_named() {
+        let echo = Op::WriteSingle {
+            unit: 2,
+            fc: 6,
+            addr: 10,
+            value: 42,
+        };
+        let mut buf = [0u8; MAX_ADU];
+        let n = echo.encode(&mut buf).unwrap_or(MAX_ADU);
+        assert_eq!(
+            parse_response(&buf[..n]),
+            Ok(RespOp::WriteEcho {
+                unit: 2,
+                fc: 6,
+                addr: 10,
+                value: 42
+            })
+        );
+        // тот же кадр как ЗАПРОС тоже разбирается — эхо симметрично
+        assert_eq!(parse(&buf[..n]), Ok(echo));
+
+        // оборванный ответ: count обещает больше, чем пришло
+        let mut resp = fc3_response(1, &[1, 2, 3]);
+        resp.truncate(resp.len() - 1);
+        let crc = crc16(&resp[..resp.len() - 2]);
+        let n = resp.len();
+        resp[n - 2] = (crc & 0xFF) as u8;
+        resp[n - 1] = (crc >> 8) as u8;
+        assert_eq!(parse_response(&resp), Err(RtuError::BadLength));
+    }
+
+    #[test]
+    fn an_exception_response_is_never_a_read() {
+        let mut buf = [0u8; 5];
+        let n = Op::Exception {
+            unit: 7,
+            fc: 3,
+            code: 2,
+        }
+        .encode(&mut buf)
+        .unwrap_or(MAX_ADU);
+        assert_eq!(
+            parse_response(&buf[..n]),
+            Ok(RespOp::Exception {
+                unit: 7,
+                fc: 3,
+                code: 2
+            })
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

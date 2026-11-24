@@ -49,6 +49,9 @@ pub mod guard;
 pub mod policy;
 pub mod replay;
 pub mod rtu;
+pub mod serial;
+#[cfg(feature = "serial")]
+pub use serial::os::OsPort;
 
 /// Kani harnesses, compiled only under `cargo kani` — proofs over the code, not over the model.
 #[cfg(kani)]
@@ -63,3 +66,4 @@ pub use guard::{
 pub use policy::{Policy, PolicyError, Request, Role, Verdict};
 pub use replay::{CounterStore, ReplayError, ReplayWindow};
 pub use rtu::{crc16, parse as parse_rtu, Op as RtuOp, RtuError, MAX_ADU};
+pub use serial::{Port, SerialError, SerialLink, Timing};
