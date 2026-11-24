@@ -3,9 +3,9 @@
 **English** · [Русский](README.ru.md)
 
 [![CI](https://github.com/kostyk348/redoubt/actions/workflows/ci.yml/badge.svg)](https://github.com/kostyk348/redoubt/actions/workflows/ci.yml)
-![tests](https://img.shields.io/badge/tests-28-brightgreen)
+![tests](https://img.shields.io/badge/tests-39-brightgreen)
 ![clippy](https://img.shields.io/badge/clippy-warnings%20are%20errors-brightgreen)
-![lean](https://img.shields.io/badge/lean-20%20theorems-blueviolet)
+![lean](https://img.shields.io/badge/lean-25%20theorems-blueviolet)
 ![noise](https://img.shields.io/badge/noise-parity%20with%20snow-informational)
 [![rust](https://img.shields.io/badge/rust-1.80%2B-orange)](Cargo.toml)
 ![licence](https://img.shields.io/badge/licence-MIT-blue)
@@ -42,9 +42,9 @@ provisioned safe value is driven to it, and the event is recorded.
 
 | check | result |
 |---|---|
-| `cargo test` | **28 tests** (guard, protocol, handshake parity) |
+| `cargo test` | **39 tests** (guard, protocol, handshake parity) |
 | `cargo clippy --all-targets -- -D warnings` | clean |
-| `lean lean/Redoubt.lean` | exit 0, **20 theorems**, axioms `propext`/`choice`/`Quot.sound`, no `sorryAx` |
+| `lean lean/Redoubt.lean` | exit 0, **25 theorems**, axioms `propext`/`choice`/`Quot.sound`, no `sorryAx` |
 | parity with `snow` (reference Noise) | handshake completes, transport decrypts both ways |
 | `cargo kani` (in CI) | three harnesses: total decoding, total policy evaluation, no address wrap |
 
@@ -52,10 +52,31 @@ The parity check earned its keep: it found **two real bugs** — the prologue wa
 instead of one, and the pre-message public keys were never folded into the transcript. Both are fixed,
 and `tests/snow_parity.rs` keeps them fixed.
 
+## RS-485 / Modbus RTU: the south side
+
+Real plants are RS-485 lines, not only IP. `src/rtu.rs` speaks Modbus RTU south of the guard:
+one ADU in, exactly one operation out — and the **same** policy engine judges it (no second
+authorisation language for the second transport). The decoder refuses rather than guesses:
+trailing bytes (`TrailingBytes` — the link layer splits on silence, not on a second CRC),
+unit 0 (`BroadcastUnit` — "everyone" is not an authorisation subject), coil writes that are
+neither `0x0000` nor `0xFF00` (`BadValue`), spans that cross `0xFFFF` (`AddressWrap`), and
+anything longer than 256 bytes (`TooLong` — refused, never truncated).
+
+The model side gains five theorems: a CRC failure never becomes an operation, a wrapped span
+never decodes, the broadcast address never decodes, decoding is the inverse of encoding, and
+a success pins the frame to exactly one ADU of its function code's shape. Reference frames
+from the Modbus over serial line specification (`01 03 00 00 00 01 84 0A`,
+`11 03 00 6B 00 03 76 87`) are unit tests.
+
+What is deliberately **not** in the library: serial ports, baud, and the 3.5-character
+silence timer — those belong to the link layer above the wire. The north side stays
+Redoubt/1 over IP: at 9600 baud a single ~100-byte frame costs about a second of line
+time, which is the wrong budget for the heartbeat gate.
+
 ## Quick start
 
 ```sh
-cargo test             # 28 tests
+cargo test             # 39 tests
 ci/run.sh              # everything CI runs: fmt, clippy, tests, lean
 ```
 
@@ -114,8 +135,8 @@ src/policy.rs       deny-overrides parser and evaluator, three verdicts
 src/audit.rs        hash chain with HMAC checkpoints
 src/guard.rs        the seven gates, dual control, revocation, dead-man timer
 src/kani_proofs.rs  Kani harnesses (cfg(kani)), run in CI on Linux
-lean/Redoubt.lean   20 theorems about the decision model
-tests/              28 tests, no mocks, no network
+lean/Redoubt.lean   25 theorems about the decision model (incl. the RTU south side)
+tests/              39 tests, no mocks, no network
 draft/              draft-kostyk-redoubt-00.txt — the Internet-Draft
 ci/                 the same checks CI runs, for a local commit
 ```
