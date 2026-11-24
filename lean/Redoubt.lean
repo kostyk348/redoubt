@@ -502,8 +502,9 @@ theorem decode_roundtrip (o : Op) (hcrc : True) :
 
 /-- Whatever decodes, decodes **at its own length**: a success pins the frame to exactly
 one ADU of the fc's shape. -/
-theorem decoded_length_is_the_fc_length (fc : Fc) (len crcOk spanOk unitOk : Bool)
-    (unit addr qty : Nat) (h : decode fc len crcOk spanOk unitOk unit addr qty = some ⟨fc, unit, addr, qty⟩) :
+theorem decoded_length_is_the_fc_length (fc : Fc) (len : Nat) (crcOk spanOk unitOk : Bool)
+    (unit addr qty : Nat)
+    (h : decode fc len crcOk spanOk unitOk unit addr qty = some ⟨fc, unit, addr, qty⟩) :
     len = aduLen fc qty := by
   simp [decode] at h
   exact h.1
