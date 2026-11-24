@@ -38,12 +38,24 @@ impl Timing {
     }
 }
 
+/// Half-duplex bus direction. On a 2-wire RS-485 line the adapter must be told when it
+/// may transmit; on a 4-wire line (or anything full-duplex) nobody listens to this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Transmit,
+    Receive,
+}
+
 /// What the library needs from a wire. `read_some` blocks until at least one byte
 /// arrives **or** `gap_us` elapses with silence (`Ok(0)`) — that single contract is
-/// what makes the link testable without hardware and without sleeps.
+/// what makes the link testable without hardware and without sleeps. `drive` is a
+/// no-op on full-duplex ports; a 2-wire adapter maps it to its DE/RE (RTS).
 pub trait Port {
     fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()>;
     fn read_some(&mut self, buf: &mut [u8], gap_us: u64) -> std::io::Result<usize>;
+    fn drive(&mut self, _d: Direction) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Why a transaction did not complete.
@@ -63,6 +75,9 @@ pub enum SerialError {
     BadAnswer(rtu::RtuError),
     /// A *different* unit answered: on a multi-drop line that is a foreign device or noise.
     UnitMismatch { expected: u8, got: u8 },
+    /// The cold line kept streaming for more than one ADU's worth of bytes without ever
+    /// going silent: a stuck adapter or a broken wire, and the master refuses to join it.
+    ColdLine,
 }
 
 impl core::fmt::Display for SerialError {
@@ -76,6 +91,9 @@ impl core::fmt::Display for SerialError {
             SerialError::BadAnswer(e) => write!(f, "serial: answer is not one ADU: {e}"),
             SerialError::UnitMismatch { expected, got } => {
                 write!(f, "serial: unit {expected} asked, unit {got} answered")
+            }
+            SerialError::ColdLine => {
+                f.write_str("serial: the line never went silent (stuck adapter or broken wire)")
             }
         }
     }
@@ -101,11 +119,24 @@ impl<P: Port> SerialLink<P> {
     /// Send one request ADU, read the answer up to the silence gap, decode it, and
     /// confirm it answers the unit that was asked. Returns the number of bytes of the
     /// answer ADU inside `answer`.
+    ///
+    /// Before writing, the line is drained: a cold RS-485 bus often holds a partial
+    /// frame from an interrupted transaction, and those bytes belong to nobody — they
+    /// are read out to the next silence gap (bounded: more than one ADU of garbage
+    /// without silence is a stuck adapter, [`SerialError::ColdLine`]).
     pub fn transact(&mut self, request: &[u8], answer: &mut [u8]) -> Result<usize, SerialError> {
         // Only a well-formed request leaves the gate: same rule as everything else here.
         let op = rtu::parse(request).map_err(SerialError::MalformedRequest)?;
         let expected_unit = op.unit();
-        self.port.write_all(request).map_err(SerialError::Port)?;
+        drain_port(&mut self.port, self.timing)?;
+        self.port
+            .drive(Direction::Transmit)
+            .map_err(SerialError::Port)?;
+        let sent = self.port.write_all(request).map_err(SerialError::Port);
+        self.port
+            .drive(Direction::Receive)
+            .map_err(SerialError::Port)?;
+        sent?;
 
         // First byte: the response timeout is the budget, not the silence gap.
         let first = self
@@ -142,50 +173,92 @@ impl<P: Port> SerialLink<P> {
     }
 }
 
+/// Читает вход до тишины, выбрасывая прочитанное. Граница: больше [`rtu::MAX_ADU`]
+/// байт без единой тишины — не мусор, а застрявший передатчик; такому линию не доверяют.
+fn drain_port<P: Port>(port: &mut P, timing: Timing) -> Result<(), SerialError> {
+    let mut buf = [0u8; rtu::MAX_ADU];
+    let mut drained = 0usize;
+    loop {
+        let n = port
+            .read_some(&mut buf, timing.t35_us)
+            .map_err(SerialError::Port)?;
+        if n == 0 {
+            return Ok(()); // тишина: линия чиста
+        }
+        drained += n;
+        if drained > rtu::MAX_ADU {
+            return Err(SerialError::ColdLine);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::rtu::Op;
+    use std::cell::RefCell;
 
     /// Для счастливых путей: ошибка транзакции — падение теста с причиной в сообщении.
     fn tx(r: Result<usize, SerialError>) -> usize {
         assert!(r.is_ok(), "transact failed: {:?}", r.as_ref().err());
         r.unwrap_or(0)
     }
-    use std::cell::RefCell;
 
-    /// Виртуальный порт: сценарий прибытий на виртуальных микросекундах.
-    /// Никаких sleep'ов — время движется только когда порт решает, что байт «пришёл».
+    /// Виртуальный порт с виртуальным секундомером: никаких sleep'ов.
+    /// Два сценария: `pre` — мусор на холодной линии (доступен ДО записи),
+    /// `resp` — ответ слейва (доступен ТОЛЬКО после записи: настоящий слейв
+    /// не отвечает на запрос, которого не было). Направления DE/RE записываются.
     struct MockPort {
-        script: RefCell<Vec<(u64, u8)>>, // (время прибытия, байт)
+        pre: RefCell<Vec<(u64, u8)>>,
+        resp: RefCell<Vec<(u64, u8)>>,
+        answered: RefCell<bool>,
         now: RefCell<u64>,
         writes: RefCell<Vec<u8>>,
+        dirs: RefCell<Vec<Direction>>,
     }
 
     impl MockPort {
-        fn new(script: &[(u64, u8)]) -> MockPort {
+        fn cold(script: &[(u64, u8)], resp: &[(u64, u8)]) -> MockPort {
             MockPort {
-                script: RefCell::new(script.to_vec()),
+                pre: RefCell::new(script.to_vec()),
+                resp: RefCell::new(resp.to_vec()),
+                answered: RefCell::new(false),
                 now: RefCell::new(0),
                 writes: RefCell::new(Vec::new()),
+                dirs: RefCell::new(Vec::new()),
             }
+        }
+
+        fn fresh(resp: &[(u64, u8)]) -> MockPort {
+            Self::cold(&[], resp)
         }
     }
 
     impl Port for MockPort {
         fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
             self.writes.borrow_mut().extend_from_slice(bytes);
+            *self.answered.borrow_mut() = true;
+            *self.now.borrow_mut() = 0; // время ответа отсчитывается от запроса
+            Ok(())
+        }
+
+        fn drive(&mut self, d: Direction) -> std::io::Result<()> {
+            self.dirs.borrow_mut().push(d);
             Ok(())
         }
 
         fn read_some(&mut self, buf: &mut [u8], gap_us: u64) -> std::io::Result<usize> {
-            let mut script = self.script.borrow_mut();
-            let now = *self.now.borrow();
-            // байт доступен, только если он «прибыл» до конца окна тишины
-            if let Some(&(at, b)) = script.first() {
+            let mut now = *self.now.borrow();
+            let source = if *self.answered.borrow() {
+                &mut *self.resp.borrow_mut()
+            } else {
+                &mut *self.pre.borrow_mut()
+            };
+            if let Some(&(at, b)) = source.first() {
                 if at <= now + gap_us {
-                    script.remove(0);
-                    *self.now.borrow_mut() = at.max(now);
+                    source.remove(0);
+                    now = at.max(now);
+                    *self.now.borrow_mut() = now;
                     if !buf.is_empty() {
                         buf[0] = b;
                     }
@@ -197,6 +270,7 @@ mod tests {
         }
     }
 
+    /// Ответ слейва на FC3: unit, fc, count, значения, crc.
     fn fc3_response(unit: u8, values: &[u16]) -> Vec<u8> {
         let mut body = vec![unit, 3, (values.len() * 2) as u8];
         for v in values {
@@ -221,46 +295,50 @@ mod tests {
         buf[..n].to_vec()
     }
 
+    /// Ответ, разложенный по прибытиям: первый байт через `start` мкс, дальше `step`.
+    fn arrivals(resp: &[u8], start: u64, step: u64) -> Vec<(u64, u8)> {
+        resp.iter()
+            .enumerate()
+            .map(|(i, b)| (start + (i as u64) * step, *b))
+            .collect()
+    }
+
     #[test]
     fn a_transaction_round_trips_over_a_scripted_line() {
         let req = fc3_request(1, 0, 2);
         let resp = fc3_response(1, &[0x1234, 0x0055]);
-        // байты ответа приходят с паузами внутри кадра (меньше T3.5), тишина после
-        let mut script: Vec<(u64, u8)> = resp
-            .iter()
-            .enumerate()
-            .map(|(i, b)| ((i as u64) * 500 + 1000, *b))
-            .collect();
-        script.push((u64::MAX, 0)); // дальше тишина
-        let mut link = SerialLink::new(MockPort::new(&script), Timing::for_baud(9600, 100));
+        let mut link = SerialLink::new(
+            MockPort::fresh(&arrivals(&resp, 1000, 500)),
+            Timing::for_baud(9600, 100),
+        );
         let mut answer = [0u8; rtu::MAX_ADU];
         let n = tx(link.transact(&req, &mut answer));
         assert_eq!(n, resp.len());
         assert_eq!(&answer[..n], &resp[..]);
+        // 2-проводная шина: передача запроса до, приём ответа после
+        assert_eq!(
+            *link.port.dirs.borrow(),
+            vec![Direction::Transmit, Direction::Receive]
+        );
     }
 
     #[test]
-    fn silence_splits_the_answer_not_the_inter_byte_gaps() {
-        // кадр с паузой 2000 мкс > T3.5 на 9600 бод? T3.5(9600) = 3.5*11/9600 ≈ 4.01 мс.
-        // Внутрикадровая пауза 2000 мкс < T3.5 — кадр не рвётся.
+    fn inter_byte_gaps_do_not_split_the_frame() {
         let req = fc3_request(2, 10, 1);
         let resp = fc3_response(2, &[7]);
-        let mut script: Vec<(u64, u8)> = resp
-            .iter()
-            .enumerate()
-            .map(|(i, b)| ((i as u64) * 2000 + 500, *b))
-            .collect();
-        script.push((u64::MAX, 0));
-        let mut link = SerialLink::new(MockPort::new(&script), Timing::for_baud(9600, 100));
+        // пауза между байтами 2000 мкс < T3.5(9600) ≈ 4010 мкс — кадр цел
+        let mut link = SerialLink::new(
+            MockPort::fresh(&arrivals(&resp, 500, 2000)),
+            Timing::for_baud(9600, 100),
+        );
         let mut answer = [0u8; rtu::MAX_ADU];
-        let n = link.transact(&req, &mut answer).unwrap_or(0);
-        assert_eq!(n, resp.len());
+        assert_eq!(tx(link.transact(&req, &mut answer)), resp.len());
     }
 
     #[test]
     fn no_answer_is_a_timeout_not_a_hang() {
         let req = fc3_request(1, 0, 1);
-        let mut link = SerialLink::new(MockPort::new(&[]), Timing::for_baud(9600, 5));
+        let mut link = SerialLink::new(MockPort::fresh(&[]), Timing::for_baud(9600, 5));
         let mut answer = [0u8; rtu::MAX_ADU];
         assert!(matches!(
             link.transact(&req, &mut answer),
@@ -272,13 +350,10 @@ mod tests {
     fn a_foreign_unit_is_refused_by_name() {
         let req = fc3_request(1, 0, 1);
         let resp = fc3_response(9, &[1]); // отвечает не тот, кого спрашивали
-        let script: Vec<(u64, u8)> = resp
-            .iter()
-            .enumerate()
-            .map(|(i, b)| ((i as u64) * 100, *b))
-            .chain(std::iter::once((u64::MAX, 0)))
-            .collect();
-        let mut link = SerialLink::new(MockPort::new(&script), Timing::for_baud(9600, 100));
+        let mut link = SerialLink::new(
+            MockPort::fresh(&arrivals(&resp, 100, 100)),
+            Timing::for_baud(9600, 100),
+        );
         let mut answer = [0u8; rtu::MAX_ADU];
         assert!(matches!(
             link.transact(&req, &mut answer),
@@ -291,29 +366,92 @@ mod tests {
 
     #[test]
     fn garbage_never_leaves_the_gate() {
-        let mut link = SerialLink::new(MockPort::new(&[]), Timing::for_baud(9600, 5));
+        let mut link = SerialLink::new(MockPort::fresh(&[]), Timing::for_baud(9600, 5));
         let mut answer = [0u8; rtu::MAX_ADU];
         assert!(matches!(
             link.transact(&[0x01, 0x03, 0x00], &mut answer),
             Err(SerialError::MalformedRequest(_))
         ));
+        // и на линию ничего не ушло
+        assert!(link.port.writes.borrow().is_empty());
     }
 
     #[test]
     fn t35_follows_the_specification() {
-        // 3.5 символа по 11 бит: 9600 бод → ~4.01 мс; выше 19200 — фикс 1.75 мс
         assert_eq!(Timing::for_baud(9600, 100).t35_us, 4_010);
         assert_eq!(Timing::for_baud(19200, 100).t35_us, 2_005);
         assert_eq!(Timing::for_baud(115200, 100).t35_us, 1_750);
+    }
+
+    #[test]
+    fn cold_line_garbage_is_drained_to_silence() {
+        // холодная шина держит хвост прерванной транзакции: дренаж вычитывает его
+        // до тишины, запрос уходит, ответ разбирается нормально
+        let req = fc3_request(1, 0, 1);
+        let garbage = [0x01, 0x03, 0x02, 0x00, 0x0A]; // обрывок чужого кадра
+        let resp = fc3_response(1, &[5]);
+        let script: Vec<(u64, u8)> = garbage
+            .iter()
+            .enumerate()
+            .map(|(i, b)| ((i as u64) * 100, *b))
+            .chain(arrivals(&resp, 1000, 300))
+            .collect();
+        let mut link = SerialLink::new(MockPort::cold(&script, &[]), Timing::for_baud(9600, 100));
+        // мусор в `pre`, ответ отдельного сценария не нужен: mock отдаёт pre до записи
+        let mut answer = [0u8; rtu::MAX_ADU];
+        // pre исчерпан дренаажом, resp пуст → таймаут; проверяем именно дренаж ниже
+        assert!(matches!(
+            link.transact(&req, &mut answer),
+            Err(SerialError::TimedOut)
+        ));
+        // весь мусор вычитан и запрос ушёл на линию
+        assert_eq!(link.port.writes.borrow().len(), req.len());
+    }
+
+    #[test]
+    fn cold_line_that_never_goes_silent_is_refused() {
+        // застрявший передатчик: байты текут непрерывно, тишины нет
+        let req = fc3_request(1, 0, 1);
+        let script: Vec<(u64, u8)> = (0..(rtu::MAX_ADU as u64 + 5))
+            .map(|i| (i * 10, (i % 256) as u8))
+            .collect();
+        let mut link = SerialLink::new(MockPort::cold(&script, &[]), Timing::for_baud(9600, 100));
+        let mut answer = [0u8; rtu::MAX_ADU];
+        assert!(matches!(
+            link.transact(&req, &mut answer),
+            Err(SerialError::ColdLine)
+        ));
+    }
+
+    #[test]
+    fn a_normal_transaction_after_a_drained_cold_line_works() {
+        // мусор кончился до тишины, затем слейв отвечает — полный happy-path
+        let req = fc3_request(3, 0, 1);
+        let garbage = [0x11, 0x03, 0x02];
+        let resp = fc3_response(3, &[0x0F0F]);
+        let script: Vec<(u64, u8)> = garbage
+            .iter()
+            .enumerate()
+            .map(|(i, b)| ((i as u64) * 100, *b))
+            .collect();
+        let mut link = SerialLink::new(
+            MockPort::cold(&script, &arrivals(&resp, 1000, 300)),
+            Timing::for_baud(9600, 100),
+        );
+        let mut answer = [0u8; rtu::MAX_ADU];
+        let n = tx(link.transact(&req, &mut answer));
+        assert_eq!(n, resp.len());
+        assert_eq!(&answer[..n], &resp[..]);
     }
 }
 
 /// Привязка к настоящему COM-порту: за фичей `serial`, чтобы дефолтная сборка
 /// библиотеки оставалась без зависимостей. Адаптер тонкий по замыслу — единственная
-/// его работа: перевести «байт или тишина через gap» в таймауты ОС.
+/// его работа: перевести контракт «байт или тишина через gap» и «направление шины»
+/// в таймауты и RTS (классический DE/RE) ОС.
 #[cfg(feature = "serial")]
 pub mod os {
-    use super::{Port, SerialLink, Timing};
+    use super::{Direction, Port, SerialLink, Timing};
     use std::io;
     use std::time::Duration;
 
@@ -346,6 +484,13 @@ pub mod os {
     impl Port for OsPort {
         fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
             io::Write::write_all(&mut self.port, bytes)
+        }
+
+        // 2-проводная RS-485: направление — классический RTS-DE/RE адаптер.
+        fn drive(&mut self, d: Direction) -> io::Result<()> {
+            self.port
+                .write_request_to_send(d == Direction::Transmit)
+                .map_err(io::Error::other)
         }
 
         fn read_some(&mut self, buf: &mut [u8], gap_us: u64) -> io::Result<usize> {

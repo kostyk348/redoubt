@@ -3,7 +3,7 @@
 **English** · [Русский](README.ru.md)
 
 [![CI](https://github.com/kostyk348/redoubt/actions/workflows/ci.yml/badge.svg)](https://github.com/kostyk348/redoubt/actions/workflows/ci.yml)
-![tests](https://img.shields.io/badge/tests-48-brightgreen)
+![tests](https://img.shields.io/badge/tests-51-brightgreen)
 ![clippy](https://img.shields.io/badge/clippy-warnings%20are%20errors-brightgreen)
 ![lean](https://img.shields.io/badge/lean-25%20theorems-blueviolet)
 ![noise](https://img.shields.io/badge/noise-parity%20with%20snow-informational)
@@ -42,7 +42,7 @@ provisioned safe value is driven to it, and the event is recorded.
 
 | check | result |
 |---|---|
-| `cargo test` | **48 tests** (guard, protocol, handshake parity) |
+| `cargo test` | **51 tests** (guard, protocol, handshake parity) |
 | `cargo clippy --all-targets -- -D warnings` | clean |
 | `lean lean/Redoubt.lean` | exit 0, **25 theorems**, axioms `propext`/`choice`/`Quot.sound`, no `sorryAx` |
 | parity with `snow` (reference Noise) | handshake completes, transport decrypts both ways |
@@ -78,7 +78,15 @@ The link layer itself lives in `src/serial.rs`: T3.5 timing by the book (3.5 × 
 "
        "decoded by the response-shaped parser, refused by name when a *different* unit answers.
 "
-       "The OS adapter (`serialport`) sits behind the `serial` feature. The north side stays
+       "The OS adapter (`serialport`) sits behind the `serial` feature.
+"
+       "Half-duplex is first-class: `Port::drive` names the bus direction (`Transmit`/`Receive`),
+"
+       "and the OS adapter maps it to the classic RTS-DE/RE. A cold line is drained to silence
+"
+       "before every transaction; garbage that never goes silent is a stuck adapter and is
+"
+       "refused (`ColdLine`) rather than joined. The north side stays
 "
        "Redoubt/1 over IP: at 9600 baud a single ~100-byte frame costs about a second of line
 "
@@ -87,7 +95,7 @@ The link layer itself lives in `src/serial.rs`: T3.5 timing by the book (3.5 × 
 ## Quick start
 
 ```sh
-cargo test             # 48 tests
+cargo test             # 51 tests
 ci/run.sh              # everything CI runs: fmt, clippy, tests, lean
 ```
 
@@ -147,7 +155,7 @@ src/audit.rs        hash chain with HMAC checkpoints
 src/guard.rs        the seven gates, dual control, revocation, dead-man timer
 src/kani_proofs.rs  Kani harnesses (cfg(kani)), run in CI on Linux
 lean/Redoubt.lean   25 theorems about the decision model (incl. the RTU south side)
-tests/              48 tests, no mocks, no network
+tests/              51 tests, no mocks, no network
 draft/              draft-kostyk-redoubt-00.txt — the Internet-Draft
 ci/                 the same checks CI runs, for a local commit
 ```
