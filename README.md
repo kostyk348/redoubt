@@ -3,7 +3,7 @@
 **English** · [Русский](README.ru.md)
 
 [![CI](https://github.com/kostyk348/redoubt/actions/workflows/ci.yml/badge.svg)](https://github.com/kostyk348/redoubt/actions/workflows/ci.yml)
-![tests](https://img.shields.io/badge/tests-39-brightgreen)
+![tests](https://img.shields.io/badge/tests-48-brightgreen)
 ![clippy](https://img.shields.io/badge/clippy-warnings%20are%20errors-brightgreen)
 ![lean](https://img.shields.io/badge/lean-25%20theorems-blueviolet)
 ![noise](https://img.shields.io/badge/noise-parity%20with%20snow-informational)
@@ -42,7 +42,7 @@ provisioned safe value is driven to it, and the event is recorded.
 
 | check | result |
 |---|---|
-| `cargo test` | **39 tests** (guard, protocol, handshake parity) |
+| `cargo test` | **48 tests** (guard, protocol, handshake parity) |
 | `cargo clippy --all-targets -- -D warnings` | clean |
 | `lean lean/Redoubt.lean` | exit 0, **25 theorems**, axioms `propext`/`choice`/`Quot.sound`, no `sorryAx` |
 | parity with `snow` (reference Noise) | handshake completes, transport decrypts both ways |
@@ -68,15 +68,26 @@ a success pins the frame to exactly one ADU of its function code's shape. Refere
 from the Modbus over serial line specification (`01 03 00 00 00 01 84 0A`,
 `11 03 00 6B 00 03 76 87`) are unit tests.
 
-What is deliberately **not** in the library: serial ports, baud, and the 3.5-character
-silence timer — those belong to the link layer above the wire. The north side stays
-Redoubt/1 over IP: at 9600 baud a single ~100-byte frame costs about a second of line
-time, which is the wrong budget for the heartbeat gate.
+The link layer itself lives in `src/serial.rs`: T3.5 timing by the book (3.5 × 11-bit
+"
+       "characters, fixed 1.75 ms above 19200 baud), a `Port` trait so the default build stays
+"
+       "dependency-free and tests run on a virtual port with a virtual clock, and
+"
+       "`SerialLink::transact` — a valid request out, the answer read up to the silence gap,
+"
+       "decoded by the response-shaped parser, refused by name when a *different* unit answers.
+"
+       "The OS adapter (`serialport`) sits behind the `serial` feature. The north side stays
+"
+       "Redoubt/1 over IP: at 9600 baud a single ~100-byte frame costs about a second of line
+"
+       "time, which is the wrong budget for the heartbeat gate.
 
 ## Quick start
 
 ```sh
-cargo test             # 39 tests
+cargo test             # 48 tests
 ci/run.sh              # everything CI runs: fmt, clippy, tests, lean
 ```
 
@@ -136,7 +147,7 @@ src/audit.rs        hash chain with HMAC checkpoints
 src/guard.rs        the seven gates, dual control, revocation, dead-man timer
 src/kani_proofs.rs  Kani harnesses (cfg(kani)), run in CI on Linux
 lean/Redoubt.lean   25 theorems about the decision model (incl. the RTU south side)
-tests/              39 tests, no mocks, no network
+tests/              48 tests, no mocks, no network
 draft/              draft-kostyk-redoubt-00.txt — the Internet-Draft
 ci/                 the same checks CI runs, for a local commit
 ```
