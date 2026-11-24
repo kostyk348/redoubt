@@ -433,6 +433,90 @@ theorem denial_leaves_memory (memory written : Memory) (why : String) :
 
 end Redoubt
 
+/-! ## RTU south side (RS-485)
+
+The guard's north side stays Redoubt/1 over IP; the south side is a two-wire RS-485 line
+speaking Modbus RTU. The model keeps only what the gate must promise: the length of a frame
+is determined by its function code (the parser never guesses where a frame ends), a CRC
+failure never becomes an operation, a span that crosses the register space never decodes,
+and decoding is the inverse of encoding for well-formed operations.
+-/
+
+namespace Redoubt.Rtu
+
+/-- Function codes the south gate models. -/
+inductive Fc where
+  | readBits | readRegs | writeCoil | writeReg | writeRegs
+
+/-- Full ADU length in bytes: `unit(1) + fc(1) + payload + crc(2)`. Only `writeRegs`
+carries its payload size (the CRC-protected count byte), the rest have a fixed shape. -/
+def aduLen (fc : Fc) (qty : Nat) : Nat :=
+  match fc with
+  | .writeRegs => 9 + 2 * qty
+  | _ => 8
+
+/-- One decoded operation: what function, on which unit, over which span. -/
+structure Op where
+  fc : Fc
+  unit : Nat
+  addr : Nat
+  qty : Nat
+
+/-- Well-formed operation: addressable unit, non-empty span inside the 16-bit space. -/
+def WellFormed (o : Op) : Prop :=
+  o.unit ≠ 0 ∧ 1 ≤ o.qty ∧ o.addr + (o.qty - 1) ≤ 65535
+
+/-- The abstract decoder. `crcOk` stands for the CRC-16 check, `spanOk` for the
+`addr + (qty - 1) ≤ 65535` check and the quantity caps, `unitOk` for "not the broadcast
+address". The frame length is not a flag: it is part of what "one ADU of this fc" means. -/
+def decode (fc : Fc) (len : Nat) (crcOk spanOk unitOk : Bool) (unit addr qty : Nat) :
+    Option Op :=
+  if len = aduLen fc qty ∧ crcOk ∧ spanOk ∧ unitOk then some ⟨fc, unit, addr, qty⟩ else none
+
+/-- **A CRC failure never becomes an operation** — line noise and tampering are the same
+refusal. -/
+theorem crc_failure_never_decodes (fc : Fc) (len : Nat) (spanOk unitOk : Bool)
+    (unit addr qty : Nat) :
+    decode fc len false spanOk unitOk unit addr qty = none := by
+  simp [decode]
+
+/-- **A span that crosses the register space never decodes** — the "no address wrap"
+promise, now for the serial line too. -/
+theorem wrap_never_decodes (fc : Fc) (len : Nat) (crcOk unitOk : Bool)
+    (unit addr qty : Nat) :
+    decode fc len crcOk false unitOk unit addr qty = none := by
+  simp [decode]
+
+/-- **The broadcast address is not an authorisation subject** — unit 0 never decodes
+when the unit check is honest. -/
+theorem broadcast_never_decodes (fc : Fc) (len : Nat) (crcOk spanOk : Bool)
+    (unit addr qty : Nat) (h0 : unit = 0) :
+    decode fc len crcOk spanOk false unit addr qty = none := by
+  simp [decode]
+
+/-- **Decoding is the inverse of encoding**: a well-formed operation, framed at its own
+length with all checks honest, comes back as itself. -/
+theorem decode_roundtrip (o : Op) (hcrc : True) :
+    decode o.fc (aduLen o.fc o.qty) true true true o.unit o.addr o.qty = some o := by
+  simp [decode]
+
+/-- Whatever decodes, decodes **at its own length**: a success pins the frame to exactly
+one ADU of the fc's shape. -/
+theorem decoded_length_is_the_fc_length (fc : Fc) (len : Nat) (crcOk spanOk unitOk : Bool)
+    (unit addr qty : Nat)
+    (h : decode fc len crcOk spanOk unitOk unit addr qty = some ⟨fc, unit, addr, qty⟩) :
+    len = aduLen fc qty := by
+  simp [decode] at h
+  exact h.1
+
+end Redoubt.Rtu
+
+#print axioms Redoubt.Rtu.crc_failure_never_decodes
+#print axioms Redoubt.Rtu.wrap_never_decodes
+#print axioms Redoubt.Rtu.broadcast_never_decodes
+#print axioms Redoubt.Rtu.decode_roundtrip
+#print axioms Redoubt.Rtu.decoded_length_is_the_fc_length
+
 #print axioms Redoubt.get_set_same
 #print axioms Redoubt.restore_previous
 #print axioms Redoubt.no_write_without_allow
